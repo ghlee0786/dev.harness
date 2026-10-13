@@ -191,7 +191,10 @@ function ensureExclude(excludeFile, pattern) {
   const re = new RegExp(`^/?${bare.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/?\\s*$`, 'm');
   if (re.test(text)) return false;
   fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
-  fs.writeFileSync(excludeFile, text + (text && !text.endsWith('\n') ? '\n' : '') + pattern + '\n');
+  // 원자적으로(임시 파일 → 이름 바꾸기). [2026-10-13 릴리스 CI 실측] 동시에 뜬 작업 4개가 읽고-고쳐-쓰기를 겹쳐 사용자의 exclude 파일이 깨졌다.
+  const tmp = `${excludeFile}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, text + (text && !text.endsWith('\n') ? '\n' : '') + pattern + '\n');
+  fs.renameSync(tmp, excludeFile);
   return true;
 }
 
@@ -200,8 +203,8 @@ function ensureExclude(excludeFile, pattern) {
 function addWorktree(root, wt, o) {
   const opt = o || {};
   const P = S.paths(root);
-  ensureExclude(P.excludeFile, '.harness-worktrees/');
   return S.withLockSync(root, 'worktree', () => {
+    ensureExclude(P.excludeFile, '.harness-worktrees/');   // 잠금 안에서 — 동시 작업이 같은 파일을 겹쳐 쓰지 않게
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     let args;
     if (opt.detach) args = ['worktree', 'add', '-q', '--detach', wt, opt.base || 'HEAD'];
