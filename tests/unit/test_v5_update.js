@@ -49,6 +49,33 @@ const cli = (args, env) => new Promise(res => { const c = spawn(process.execPath
     S.writeTask(repo, { ...S.newTask({ id, goal: 'g', runtime: 'claude', model: 'opus', base_branch: 'main', base_commit: git(repo, 'rev-parse', 'HEAD'), branch: `harness/${id}`, worktree: path.join(repo, '.harness-worktrees', id), owner: S.ownerRecord(), caps: { budget_usd: 1, wall_min: 1, max_continuations: 1 } }), status: 'running' });
     const u3 = await cli(['update', '--root', repo], env);
     R.check('[UP-05] 실행 중인 작업이 있으면 갈아 끼우지 않는다(install 이 거부)', u3.code !== 0 && fs.readFileSync(path.join(repo, 'harness', 'VERSION'), 'utf8').trim() === '9.9.9' && /설치하지 않았다/.test(u3.out), u3.out.slice(0, 400));
+
+    // ── 자동 갱신(사용 시점 · 하루 한 번 · 작업 중엔 건너뜀 · 하네스 파일만 커밋) — [2026-10-13 사용자 결정 A] ──
+    const u4 = await cli(['update', '--auto', '--root', repo], env);
+    R.check('[UP-06] update --auto: 실행 중인 작업이 있으면 조용히 건너뛴다(exit 0 · 그대로)', u4.code === 0 && fs.readFileSync(path.join(repo, 'harness', 'VERSION'), 'utf8').trim() === '9.9.9', u4.out.slice(0, 300));
+    // 하네스 파일을 git 에 넣어 둔 저장소 — 갱신은 하네스 파일만 따로 커밋, 사용자의 미커밋 변경은 그대로
+    const repo2 = path.join(base, 'tracked'); fs.mkdirSync(repo2); git(repo2, 'init', '-q', '-b', 'main'); git(repo2, 'config', 'user.name', 't'); git(repo2, 'config', 'user.email', 't@example.invalid'); git(repo2, 'config', 'core.autocrlf', 'false');
+    fs.writeFileSync(path.join(repo2, 'README.md'), '# t\n'); git(repo2, 'add', '-A'); git(repo2, 'commit', '-qm', 'init');
+    spawnSync(process.execPath, [CLI, 'install', '--root', repo2], { encoding: 'utf8', windowsHide: true, env });
+    git(repo2, 'add', '-A'); git(repo2, 'commit', '-qm', 'harness');
+    fs.writeFileSync(path.join(repo2, 'README.md'), '# t\nuser edit\n');
+    const u5 = await cli(['update', '--auto', '--root', repo2], env);
+    const files5 = git(repo2, 'show', '--name-only', '--format=%s', 'HEAD').split(/\r?\n/);
+    R.check('[UP-07] 자동 갱신: 설치 · 하네스 파일만 커밋(메시지 "자동 갱신") · 사용자의 미커밋 README 는 그대로',
+      u5.code === 0 && fs.readFileSync(path.join(repo2, 'harness', 'VERSION'), 'utf8').trim() === '9.9.9' && /자동 갱신/.test(files5[0]) && files5.includes('harness/VERSION') && !files5.includes('README.md') && /README\.md/.test(git(repo2, 'status', '--porcelain')),
+      `${u5.code} ${u5.out.slice(-300)} | ${files5.join(',')} | ${git(repo2, 'status', '--porcelain')}`);
+
+    // 언제 확인하나 — 설치된 사본에서만 · 하루 한 번 · auto_update: off 면 안 한다(실제로 띄우는 대신 기록만 받는다)
+    const AU = require('../../harness/lib/autoupdate');
+    const spawned = []; const spy = (root) => spawned.push(root);
+    const m1 = AU.maybe(repo2, { spawn: spy, now: 1000 });
+    const m2 = AU.maybe(repo2, { spawn: spy, now: 1000 + 3600 * 1000 });
+    const m3 = AU.maybe(repo2, { spawn: spy, now: 1000 + 25 * 3600 * 1000 });
+    R.check('[UP-08] 하루 한 번만 확인한다(첫 호출 · 25시간 뒤 → 띄움 · 1시간 뒤 → 안 띄움)', m1 && !m2 && m3 && spawned.length === 2, JSON.stringify([m1, m2, m3, spawned.length]));
+    fs.writeFileSync(path.join(repo2, 'CLAUDE.md'), '```yaml\nauto_update: off\n```\n');
+    R.check('[UP-09] auto_update: off 면 확인하지 않는다', !AU.maybe(repo2, { spawn: spy, now: 1000 + 60 * 3600 * 1000 }) && spawned.length === 2);
+    const plain = path.join(base, 'plain'); fs.mkdirSync(plain); git(plain, 'init', '-q');
+    R.check('[UP-10] 하네스가 설치되지 않은 곳(원본 · 저장소만)은 확인하지 않는다', !AU.maybe(plain, { spawn: spy, now: 1 }) && !AU.maybe(path.resolve(__dirname, '..', '..'), { spawn: spy, now: 1 }) && spawned.length === 2);
     srv.close();
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }

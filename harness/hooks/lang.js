@@ -34,6 +34,8 @@ function decide(input, runtime) {
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
   const info = C.repoInfo(cwd);
   if (ev === 'UserPromptSubmit') {
+    // 자동 갱신 확인 — 대화형 세션은 하네스 명령을 거의 부르지 않으므로 사용자가 말할 때도 본다(하루 한 번 · 별도 프로세스).
+    if (info) { try { require('../lib/autoupdate').maybe(info.root); } catch { /* 훅을 멈추지 않는다 */ } }
     const ko = isKorean(input.prompt);
     if (info && sid) C.updateSession(info.common, sid, runtime, s => { s.user_lang = ko ? 'ko' : (s.user_lang || null); return s; });
     return ko ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: CONTEXT } } : null;

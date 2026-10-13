@@ -50,6 +50,10 @@ async function update(o) {
   if (!newer(latest, current)) return { ...base, updated: false, report: `하네스가 최신이다 — 지금 ${current} · 최신 ${latest} (${repo})` };
   if (o.check) return { ...base, updated: false, available: true, report: `새 판이 있다 — 지금 ${current} → ${latest}. 설치: node harness/cli.js update` };
   if (!asset) return { ...base, ok: false, updated: false, report: `릴리스 ${latest} 에 harness-*.tar.gz 가 없다 — 설치하지 않았다` };
+  // 자동 갱신(--auto): 실행 중인 작업이 있으면 조용히 건너뛴다(다음 확인 때 다시) — 작업 도중 하네스를 바꾸지 않는다.
+  const S = require('./state'), AU = require('./autoupdate');
+  if (o.auto && S.listTasks(root).some(t => t.status === 'running' && S.ownerAlive(t.owner))) return { ...base, updated: false, skipped: 'running', report: `자동 갱신 미룸 — 실행 중인 작업이 있다(${current} → ${latest})` };
+  const before = o.auto ? AU.dirty(root) : null;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-update-'));
   try {
     const tgz = path.join(tmp, asset.name);
@@ -62,7 +66,13 @@ async function update(o) {
     const ins = spawnSync(process.execPath, [cli, 'install', '--root', root], { encoding: 'utf8', windowsHide: true, timeout: 300000 });
     const out = `${ins.stdout || ''}${ins.stderr || ''}`.trim();
     if (ins.status !== 0) return { ...base, ok: false, updated: false, report: `설치하지 않았다(${latest}): ${out.slice(0, 600)}` };
-    return { ...base, updated: true, report: `하네스를 ${current} → ${latest} 로 바꿨다.\n${out}` };
+    // 자동 갱신: 하네스 파일을 git 이 추적하는 저장소면 갱신이 바꾼 것만 따로 커밋(사용자의 미커밋 변경은 넣지 않는다) · 결과를 기록한다.
+    let commit = null;
+    if (o.auto) {
+      try { commit = AU.commitUpdate(root, before, current, latest); } catch (e) { commit = null; }
+      AU.writeState(root, { ...AU.readState(root), updated_at: Date.now(), from: current, to: latest, commit });
+    }
+    return { ...base, updated: true, commit, report: `하네스를 ${current} → ${latest} 로 바꿨다.${commit ? ` (커밋 ${commit.slice(0, 10)})` : ''}\n${out}` };
   } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 임시 폴더 */ } }
 }
 

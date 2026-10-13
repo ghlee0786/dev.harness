@@ -16,7 +16,7 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 ```
 
 `<내 저장소>` 에 `harness/` 사본 · `AGENTS.md` 관리 블록 · `CLAUDE.md` 의 `@AGENTS.md` · Claude Code / Codex 훅 · `harness` 스킬이 들어간다.
-이후 새 판은 `node harness/cli.js update`(`--dry-run` 은 비교만) — 실행 중인 작업이 있으면 갈아 끼우지 않는다. 걷어 내기는 `install --uninstall`.
+**자동 갱신** — 하네스를 쓰는 시점(대화형 세션에서 말할 때 · 하네스 명령)에 하루 한 번 최신 릴리스를 확인하고, 새 판이 있으면 백그라운드로 설치한다. 실행 중인 작업이 있으면 다음으로 미루고, 하네스 파일을 git 에 넣어 둔 저장소는 갱신이 바꾼 하네스 파일만 따로 커밋한다(사용자의 미커밋 변경은 그대로). 손으로는 `node harness/cli.js update`(`--dry-run` 은 비교만). 걷어 내기는 `install --uninstall`.
 
 ## 명령
 
@@ -60,6 +60,7 @@ worktree_links: ["../SiblingRepo"]       # 저장소 밖 형제 폴더를 참조
 outside_git_ok: ["data/*.db"]            # worktree 를 붙잡지 않는 런타임 부산물
 transcribe_command: "whisper \"{in}\" --output_dir \"{outdir}\""   # 전사기(없으면 faster-whisper · whisper 자동)
 bug_report: on                           # 하네스 보고 자동 발행(off 로 끈다)
+auto_update: on                          # 최신 릴리스 자동 갱신(off 로 끈다)
 ```
 
 ## 하네스 보고 — 자동 이슈

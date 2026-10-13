@@ -39,7 +39,7 @@ defaults: runtime claude · model opus · budget $20 · wall 120 min · max cont
 
 const VALUE = new Set(['--check', '--runtime', '--model', '--effort', '--budget-usd', '--token-budget', '--wall-min', '--max-continuations', '--root', '--into', '--base', '--target', '--check-timeout-min', '--goal-file',
   '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--tag']);
-const FLAGS = new Set(['--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs']);
+const FLAGS = new Set(['--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs']);
 
 function parse(argv) {
   const o = { _: [], checks: [], docs: [], allow: [], attach: [] };
@@ -86,6 +86,8 @@ async function main(argv, io) {
   if (!cmd || cmd === 'help' || o.help || o.h) { out(USAGE); return cmd || o.help || o.h ? 0 : 2; }
   const root = o.root ? path.resolve(o.root) : process.cwd();
   const common = { root, log: err, run: io && io.run, checkTimeoutMs: o.checkTimeoutMs };
+  // 자동 갱신 확인(설치된 사본 · 하루 한 번 · 별도 프로세스) — 갱신 · 설치 명령 자신은 빼고. 실패는 조용히.
+  if (!['install', 'uninstall', 'update', 'version'].includes(cmd)) { try { require('./lib/autoupdate').maybe(root); } catch { /* 하네스를 멈추지 않는다 */ } }
 
   if (cmd === 'install' || cmd === 'uninstall') {
     let I;
@@ -138,7 +140,7 @@ async function main(argv, io) {
     // 배포된 최신 릴리스로 갈아 끼운다(--dry-run 은 비교만) · version 은 지금 판만.
     const U = require('./lib/update');
     if (cmd === 'version') { out(`harness ${U.currentVersion()}`); return 0; }
-    try { const r = await U.update({ root, check: !!o['dry-run'], repo: o.repo }); out(r.report); return r.ok ? 0 : 1; }
+    try { const r = await U.update({ root, check: !!o['dry-run'], repo: o.repo, auto: !!o.auto }); out(r.report); return r.ok ? 0 : 1; }
     catch (e) { err(`harness update: ${e.message}`); return 1; }
   }
   if (cmd === 'stop') {
