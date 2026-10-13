@@ -42,9 +42,9 @@ function runChildren(n, script, env) {
     R.check('[ST-01] 잘못된 id 는 거부', !S.validId('../x') && !S.validId('t-1-2-zz'));
     const repo = mkRepo('r1');
     const P = S.taskPaths(repo, id);
-    R.check('[ST-02] 상태는 <git-common-dir>/harness/ 아래', P.taskFile === path.join(repo, '.git', 'harness', 'tasks', id, 'task.json') && P.locksDir === path.join(repo, '.git', 'harness', 'locks'), P.taskFile);
+    R.check('[ST-02] 상태는 <git-common-dir>/harness/ 아래', P.taskFile === path.join(fs.realpathSync.native(repo), '.git', 'harness', 'tasks', id, 'task.json') && P.locksDir === path.join(fs.realpathSync.native(repo), '.git', 'harness', 'locks'), P.taskFile);
     R.check('[ST-02] worktree 는 <repo>/.harness-worktrees/<id> · 브랜치 harness/<id> · 계획은 .harness/<id>/PLAN.md',
-      P.wt === path.join(repo, '.harness-worktrees', id) && P.branch === `harness/${id}` && P.planFile === path.join(P.wt, '.harness', id, 'PLAN.md'));
+      P.wt === path.join(fs.realpathSync.native(repo), '.harness-worktrees', id) && P.branch === `harness/${id}` && P.planFile === path.join(P.wt, '.harness', id, 'PLAN.md'));
 
     // ── 원자 쓰기 · 기록 ─────────────────────────────────────────────
     const t = S.newTask({ id, goal: 'g' });

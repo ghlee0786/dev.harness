@@ -226,10 +226,8 @@ function worktreeList(root) {
   }
   return out;
 }
-const samePath = (a, b) => {
-  const n = p => path.resolve(p).replace(/[\\/]+$/, '');
-  return S.IS_WIN ? n(a).toLowerCase() === n(b).toLowerCase() : n(a) === n(b);
-};
+// 같은 폴더인가 — 실경로로 비교한다(심볼릭 링크 · Windows 짧은 이름. hooks/_common.real 참고).
+const samePath = (a, b) => require('../hooks/_common').samePath(a, b);
 function worktreeRegistered(root, wt) { return worktreeList(root).some(w => samePath(w.path, wt)); }
 // 대상 브랜치가 체크아웃된 worktree(하네스 worktree 제외). 없으면 null.
 function checkoutOf(root, branch) {

@@ -41,7 +41,9 @@ function commonDir(root) {
   COMMON.set(key, v);
   return v;
 }
-function paths(root) {
+function paths(root0) {
+  // 실경로로 — git 이 알려 주는 경로와 같은 표기여야 비교 · 상대 경로가 맞는다(심볼릭 링크 · Windows 짧은 이름).
+  const root = require('../hooks/_common').real(root0);
   const common = commonDir(root), h = path.join(common, 'harness');
   return { root, commonDir: common, harnessDir: h, tasksDir: path.join(h, 'tasks'), sessionsDir: path.join(h, 'sessions'),
     locksDir: path.join(h, 'locks'), worktreesDir: path.join(root, '.harness-worktrees'), excludeFile: path.join(common, 'info', 'exclude') };

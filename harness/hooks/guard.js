@@ -541,7 +541,7 @@ function resolveTarget(cwd, t) {
 }
 
 function isAncestor(a, b) {           // a 가 b 의 (엄격한) 상위인가
-  const rel = path.relative(a, b);
+  const rel = path.relative(C.real(a), C.real(b));   // 실경로로(심볼릭 링크 · 짧은 이름)
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
@@ -567,9 +567,10 @@ function isDangerousTarget(t, ctx) {
   if (/^[a-zA-Z]:[\\/]*$/.test(s)) return true;                                                  // 드라이브 루트(C:\) — 어느 플랫폼에서든 막는다
   const abs = resolveTarget(ctx.cwd, s);
   if (!abs) return unresolvedIsDangerous(s) ? 'unresolved' : false;
-  const norm = path.resolve(abs);
+  // 실경로로 — 심볼릭 링크 · Windows 짧은 이름(C:\Users\RUNNER~1)으로 적힌 대상도 저장소 루트 · .git · 홈으로 알아본다(2026-10-13 CI 실측).
+  const norm = C.real(abs);
   if (path.parse(norm).root && C.samePath(norm, path.parse(norm).root)) return true;          // / · C:\
-  const homes = [os.homedir(), process.env.HOME, process.env.USERPROFILE].filter(Boolean);
+  const homes = [os.homedir(), process.env.HOME, process.env.USERPROFILE].filter(Boolean).map(C.real);
   for (const h of homes) if (C.samePath(norm, h) || isAncestor(norm, h)) return true;
   repoRootOf(ctx.cwd, ctx);
   const gitDirs = [...(ctx.roots || []).map(r => path.join(r, '.git')), ...(ctx.common ? [ctx.common] : [])];

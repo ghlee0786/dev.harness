@@ -83,7 +83,7 @@ async function waitFile(f, ms) { const t0 = Date.now(); while (Date.now() - t0 <
     R.check('[RN-03] --settings 파일 = policy.claudeSettings(allowCommands)', L && JSON.stringify(L.settings) === JSON.stringify(policy.claudeSettings(['node', 'npm'])), L && JSON.stringify(L.settings));
     R.check('[RN-03] --settings 임시 파일은 호출 뒤 지워진다', L && !!L.settingsPath && !fs.existsSync(L.settingsPath), L && L.settingsPath);
     R.check('[RN-03] 자식 환경에 CLAUDECODE · CLAUDE_CODE_ENTRYPOINT 가 없다', L && L.env.CLAUDECODE === null && L.env.CLAUDE_CODE_ENTRYPOINT === null, L && JSON.stringify(L.env));
-    R.check('[RN-03] cwd 에서 실행', L && path.resolve(L.cwd).toLowerCase() === path.resolve(cwd).toLowerCase(), L && L.cwd);
+    R.check('[RN-03] cwd 에서 실행', L && fs.realpathSync.native(L.cwd).toLowerCase() === fs.realpathSync.native(cwd).toLowerCase(), L && L.cwd);
     R.check('[RN-03] 결과: ok · session_id · final_text · 비용 · 토큰(캐시 포함 입력)',
       r.ok && !r.is_error && r.error_kind === null && r.session_id === SID && r.final_text === 'done' && r.cost_usd === 0.5 && r.session_cost_usd === 0.5
       && r.tokens && r.tokens.input === 130 && r.tokens.output === 5 && r.tokens.total === 135 && r.exit_code === 0 && Array.isArray(r.permission_denials) && r.permission_denials.length === 0, JSON.stringify(r));

@@ -59,8 +59,9 @@ function writeAtomic(file, text) {
 // 문서 경로 → 저장소 상대 posix. 절대 경로면 루트 기준으로 바꾼다. 관리 폴더 밖이면 거부.
 function docRel(root, p) {
   if (!p) throw usage('a document path is required');
-  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
-  const rel = path.relative(root, abs).split(path.sep).join('/');
+  const R = require('../hooks/_common').real;   // 실경로로 비교(심볼릭 링크 · 짧은 이름)
+  const abs = R(path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p));
+  const rel = path.relative(R(root), abs).split(path.sep).join('/');
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !MANAGED_RE.test(rel)) throw usage(`not a managed document: ${p} (docs/prds/ · docs/coordinations/ · docs/designs/ 의 .md)`);
   return rel;
 }
@@ -547,7 +548,8 @@ function resolveDocs(root, list0) {
     const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
     let st = null; try { st = fs.statSync(abs); } catch { /* 없음 */ }
     if (!st || !st.isFile()) throw usage(`--doc ${p}: no such file (${abs})`);
-    const rel = path.relative(root, abs).split(path.sep).join('/');
+    const R = require('../hooks/_common').real;   // 실경로로 비교(심볼릭 링크 · 짧은 이름)
+    const rel = path.relative(R(root), R(abs)).split(path.sep).join('/');
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw usage(`--doc ${p}: outside the repository ${root}`);
     if (!out.some(x => key(x) === key(rel))) out.push(rel);
   }

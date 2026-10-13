@@ -93,7 +93,7 @@ try {
   R.check('[install] settings: 4칸 들여쓰기 유지', read(path.join(t1, '.claude', 'settings.json')).includes('\n    "permissions"'));
 
   const codex = readJson(path.join(t1, '.codex', 'hooks.json'));
-  const absRoot = t1.split(path.sep).join('/');
+  const absRoot = fs.realpathSync.native(t1).split(path.sep).join('/');   // 설치기는 실경로를 쓴다(심볼릭 링크 · 짧은 이름)
   R.check('[install] .codex/hooks.json(저장소): 4 이벤트 · --codex · commandWindows 는 설치 때 계산한 절대 경로',
     ['PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd'].every(ev => codex.hooks[ev].some(g => g.hooks.some(h => /harness\/hooks\/[a-z-]+\.js" --codex$/.test(h.command) &&
       h.commandWindows.startsWith('node "' + absRoot + '/harness/hooks/') && /\/harness\/hooks\/[a-z-]+\.js" --codex$/.test(h.commandWindows)))) &&
@@ -191,7 +191,7 @@ try {
   write(cf7, JSON.stringify(c7, null, 2) + '\n');
   const r7 = install({ target: t7, source: SOURCE });
   const c7b = readJson(cf7);
-  const t7abs = t7.split(path.sep).join('/');
+  const t7abs = fs.realpathSync.native(t7).split(path.sep).join('/');
   // 사양 변경(2026-10-13): Stop 에 우리 훅이 둘(stop · lang)이다 — "이벤트마다 하나" 가 아니라 "설치기가 정한 수 그대로(옛 경로 사본 없이)".
   const want7 = require('../../harness/lib/install.js').codexHooks(t7);
   R.check('[L10/codex] 옮긴 저장소 재설치: 옛 경로 훅은 사라지고 이벤트마다 설치기가 정한 우리 훅만 · 새 절대 경로',

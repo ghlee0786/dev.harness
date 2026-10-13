@@ -214,7 +214,7 @@ function fake() {
     const run2 = fake();
     const g2 = await L.go({ ...quiet, root: r2, goal: 'add the feature', checks: ['node check.js'], docs: [d2.path], run: run2 });
     const task2 = S.readTask(r2, g2.id);
-    const absDoc2 = path.join(r2, ...d2.path.split('/'));
+    const absDoc2 = path.join(fs.realpathSync.native(r2), ...d2.path.split('/'));   // 하네스는 실경로로 알린다(macOS /var → /private/var · Windows 짧은 이름)
     const pr2 = run2.calls[0].prompt;
     R.check('[DOC-07] go --doc: done · task.docs 기록', g2.status === 'done' && Array.isArray(task2.docs) && task2.docs.length === 1 && task2.docs[0] === d2.path, `${g2.status} ${g2.reason} ${JSON.stringify(task2.docs)}`);
     R.check('[DOC-07] 프롬프트: 메인 체크아웃의 절대 경로 · 명세 · 복사하지 말 것 · 목표가 말하지 않으면 고치지 말 것', pr2.includes(absDoc2) && path.isAbsolute(absDoc2) && /specification/i.test(pr2) && /do not copy/i.test(pr2) && /do not edit/i.test(pr2), pr2);

@@ -187,16 +187,25 @@ function isSecretPath(p) {
   return false;
 }
 
+// 실경로 — 심볼릭 링크 · Windows 짧은 이름(8.3)을 풀어 git 이 알려 주는 경로와 같은 표기로. 없는 경로는 있는 조상까지 풀고 나머지를 붙인다.
+//   [2026-10-13 CI 실측] macOS 임시 폴더(/var → /private/var) · Windows 짧은 이름(C:\Users\RUNNER~1 ↔ runneradmin)에서
+//   같은 폴더를 다른 폴더로 봐서 guard 가 `rm -rf .` 를 막지 못했고 · 세션 파일 경로를 잃고 · 정상 커밋을 거부했다.
+function real(p) {
+  const abs = path.resolve(String(p));
+  try { return fs.realpathSync.native(abs); } catch { /* 아직 없다 */ }
+  const parent = path.dirname(abs);
+  return parent === abs ? abs : path.join(real(parent), path.basename(abs));
+}
 function samePath(a, b) {
-  const x = path.resolve(a), y = path.resolve(b);
+  const x = real(a).replace(/[\\/]+$/, ''), y = real(b).replace(/[\\/]+$/, '');
   return IS_WIN ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 // 절대/상대 경로 p 를 저장소 루트 기준 상대 경로(슬래시)로. 저장소 밖 · .git · .harness-worktrees 는 null.
 function repoRel(root, cwd, p) {
   if (!p || typeof p !== 'string') return null;
-  const abs = path.resolve(cwd || root, p);
-  let rel = path.relative(root, abs);
+  const abs = real(path.resolve(cwd || root, p));
+  let rel = path.relative(real(root), abs);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
   rel = rel.split(path.sep).join('/');
   const first = rel.split('/')[0].toLowerCase();
@@ -288,7 +297,7 @@ function listForReason(files, max) {
 }
 
 module.exports = {
-  IS_WIN, readStdinJson, git, repoInfo, harnessDir, safeId, sessionPath, sid8, sleepMs,
+  real, IS_WIN, readStdinJson, git, repoInfo, harnessDir, safeId, sessionPath, sid8, sleepMs,
   loadSession, updateSession, writeJsonAtomic, logError, detectRuntime, isSecretPath, samePath, repoRel,
   isHarnessWorktree, dirtyPaths, uncommittedOf, commitFiles, listForReason, LOCK,
 };
