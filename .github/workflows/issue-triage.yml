@@ -1,0 +1,24 @@
+name: Issue triage
+on:
+  issues:
+    types: [opened]
+permissions:
+  issues: write
+jobs:
+  label:
+    if: startsWith(github.event.issue.title, '[auto]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: labels for harness reports
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          gh label create auto-report --repo "$REPO" --color BFD4F2 --description "하네스가 자동으로 올린 보고" 2>/dev/null || true
+          gh label create intent --repo "$REPO" --color FBCA04 --description "의도와 다르게 행동함" 2>/dev/null || true
+          gh label create improve --repo "$REPO" --color 0E8A16 --description "더 나은 방향" 2>/dev/null || true
+          KIND=bug
+          case "$TITLE" in "[auto] intent"*) KIND=intent;; "[auto] improve"*) KIND=improve;; esac
+          gh issue edit "$NUM" --repo "$REPO" --add-label "auto-report,$KIND"

@@ -1,0 +1,11 @@
+{
+  "name": "dev.harness",
+  "version": "0.0.0-dev",
+  "description": "Claude Code · Codex development harness — safety, not judgment",
+  "license": "MIT",
+  "repository": "github:ghlee0786/dev.harness",
+  "bin": { "dev-harness": "harness/cli.js" },
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node tests/run.js" },
+  "files": ["harness/", "LICENSE", "README.md"]
+}

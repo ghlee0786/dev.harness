@@ -1,0 +1,42 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.invalid"
+          git config --global init.defaultBranch main
+      - env:
+          HARNESS_BUG_REPORT: "off"
+        run: node tests/run.js
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: package
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          echo "$VER" > harness/VERSION
+          mkdir -p dist
+          tar -czf "dist/harness-$VER.tar.gz" harness LICENSE README.md
+          zip -qr "dist/harness-$VER.zip" harness LICENSE README.md
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

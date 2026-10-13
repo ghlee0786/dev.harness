@@ -1,0 +1,40 @@
+# ── dev.harness 에 넣지 않는 것: 하네스와 무관한 개발 산출물 · 기록 ──
+docs/
+legacy/
+eval/
+dist/
+charters/
+plans/
+prds/
+analyses/
+*.zip
+*.tar.gz
+
+# ── 로컬 도구 설정 · 하네스 실행 흔적 ──
+.claude/
+.codex/
+.agents/
+.harness/
+.harness-worktrees/
+.vscode/
+.vs/
+.idea/
+.playwright-mcp/
+
+# ── 런타임 · 빌드 · OS ──
+node_modules/
+coverage/
+tmp/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# ── 비밀 ──
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+.npmrc
+credentials*

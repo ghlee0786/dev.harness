@@ -1,0 +1,22 @@
+name: "동작 이상 (bug)"
+description: "하네스가 오류로 멈추거나 실패했다 — 하네스 동작만 적어 주세요(프로젝트 코드 · 이름 · 경로 금지)"
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 하네스가 무엇을 했나
+      description: 명령 · 상태 · 보고 줄. 프로젝트 이름 · 경로 · 코드는 지워 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 어떻게 되길 기대했나
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 하네스 판 · OS · Node · git
+      placeholder: "node harness/cli.js version · Windows 11 · Node 22 · git 2.53"

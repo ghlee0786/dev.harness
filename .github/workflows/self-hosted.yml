@@ -1,0 +1,14 @@
+name: Self-hosted runner
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: tests on the real development machine
+        env:
+          HARNESS_BUG_REPORT: "off"
+        run: node tests/run.js
