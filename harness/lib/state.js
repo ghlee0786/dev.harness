@@ -121,6 +121,10 @@ function pidAlive(pid) {
   try { process.kill(n, 0); } catch (e) { return e.code === 'EPERM'; }
   // Linux: 끝났지만 부모가 거두지 않은 프로세스(좀비)도 kill(0) 에는 살아 있다 — /proc 의 상태가 Z 면 끝난 것이다.
   if (process.platform === 'linux') { try { if (/^\d+ \(.*\) Z /s.test(fs.readFileSync(`/proc/${n}/stat`, 'utf8'))) return false; } catch { /* /proc 없음 — kill(0) 을 믿는다 */ } }
+  // macOS 등(/proc 없음) — ps 의 상태가 Z(좀비)면 끝난 것이다. [2026-10-13 CI 실측] stop 이 "could not stop" 으로 실패했다.
+  else if (process.platform !== 'win32') {
+    try { const r = require('node:child_process').spawnSync('ps', ['-o', 'stat=', '-p', String(n)], { encoding: 'utf8', timeout: 5000 }); if (r.status === 0 && /^\s*Z/.test(r.stdout)) return false; } catch { /* ps 없음 — kill(0) 을 믿는다 */ }
+  }
   return true;
 }
 // 주인이 살아 있는가 — 같은 호스트면 pid 로, 다른 호스트면 판단할 수 없으니 살아 있다고 본다(오래된 at 은 예외).
