@@ -36,7 +36,32 @@ function plan(o) {
   return { root, remote, branch, localSha, remoteSha, ahead, behind, commits, fetched: fetched.ok, fetchError: fetched.ok ? null : String(fetched.err || '').trim().slice(0, 200) };
 }
 
+// 태그 push(릴리스) — `git push <remote> refs/tags/<t>:refs/tags/<t>` 하나. 원격에 같은 이름이 있으면: 같은 커밋이면 할 일 없음 · 다르면 거부(덮어쓰지 않는다).
+//   [2026-10-13] dev.harness 릴리스(v 태그 → release.yml)를 올릴 길이 없었다 — guard 는 git push 를 막고 이 명령은 브랜치만 올렸다.
+function pushTag(o) {
+  const root = S.mainRoot(o.root);
+  const tag = String(o.tag || '').trim();
+  if (!/^[A-Za-z0-9][\w.\-\/]*$/.test(tag)) throw usage(`push --tag: invalid tag name ${JSON.stringify(tag)}`);
+  const local = G.git(root, ['rev-parse', '-q', '--verify', `refs/tags/${tag}^{commit}`], { allowFail: true }).out.trim();
+  if (!local) throw usage(`push --tag: no such tag ${tag} in this repository`);
+  const remotes = G.git(root, ['remote'], { allowFail: true }).out.split(/\r?\n/).filter(Boolean);
+  const remote = o.remote || (remotes.length === 1 ? remotes[0] : null);
+  if (!remote) throw usage(`push --tag: there are ${remotes.length} remotes (${remotes.join(', ') || 'none'}) — name the remote`);
+  if (!remotes.includes(remote)) throw usage(`push --tag: unknown remote ${remote} (have: ${remotes.join(', ') || 'none'})`);
+  const ls = G.git(root, ['ls-remote', '--tags', remote, `refs/tags/${tag}`, `refs/tags/${tag}^{}`], { allowFail: true });
+  const lines = ls.out.split(/\r?\n/).filter(Boolean).map(l => l.split(/\s+/));
+  const peeled = (lines.find(([, r]) => r === `refs/tags/${tag}^{}`) || lines.find(([, r]) => r === `refs/tags/${tag}`) || [])[0] || null;
+  const base = { root, remote, branch: `tag ${tag}`, tag, localSha: local, remoteSha: peeled, ahead: 0, commits: [], fetched: ls.ok, fetchError: ls.ok ? null : String(ls.err || '').trim().slice(0, 200) };
+  if (peeled && peeled === local) return { ...base, ok: true, pushed: false, reason: `nothing to push — ${remote} already has tag ${tag} at ${local.slice(0, 10)}` };
+  if (peeled) return { ...base, ok: false, refused: true, reason: `${remote} has tag ${tag} at a different commit (${peeled.slice(0, 10)}; local ${local.slice(0, 10)}) — tags are not overwritten; use a new tag name` };
+  if (o.dryRun) return { ...base, ok: true, pushed: false, dryRun: true, reason: `would push tag ${tag} (${local.slice(0, 10)})` };
+  const r = G.git(root, ['push', remote, `refs/tags/${tag}:refs/tags/${tag}`], { allowFail: true, timeout: 180000 });
+  if (!r.ok) return { ...base, ok: false, pushed: false, reason: `git push failed: ${String(r.err || '').trim().slice(0, 400)}` };
+  return { ...base, ok: true, pushed: true, reason: `pushed tag ${tag} (${local.slice(0, 10)}) to ${remote}` };
+}
+
 function push(o) {
+  if (o.tag) return pushTag(o);
   const p = plan(o);
   if (!p.fetched && p.remoteSha == null) {/* 새 브랜치일 수 있다 — push 가 판단한다 */}
   if (p.behind > 0) return { ...p, ok: false, refused: true, reason: `${p.remote}/${p.branch} is ${p.behind} commit(s) ahead of ${p.branch} — not a fast-forward. Bring those commits in yourself (pull/merge), then push again.` };

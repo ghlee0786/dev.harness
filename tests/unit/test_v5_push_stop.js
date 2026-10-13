@@ -48,6 +48,21 @@ const cfg = d => { git(d, 'config', 'user.name', 't'); git(d, 'config', 'user.em
     const plainOut = Push.format({ ok: false, remote: 'gitea', branch: 'main', reason: 'git push failed: fatal: unable to access: Could not resolve host' });
     R.check('[PS-07] 인증 실패면 자기 터미널에서 자격을 저장하라고 안내한다 · 다른 실패에는 안내하지 않는다', /hint: authentication to gitea failed — run `git fetch gitea`/.test(authOut) && !/hint:/.test(plainOut), authOut + '\n--\n' + plainOut);
 
+    // ── 태그 push(릴리스) — 덮어쓰지 않는다 · 강제 없음 ──
+    //   [2026-10-13] dev.harness 릴리스(v 태그 → release.yml)를 올릴 길이 없었다 — guard 는 git push 를 막고 하네스 push 는 브랜치만 올렸다.
+    git(a, 'tag', 'v1.0.0');
+    const tg1 = spawnSync(process.execPath, [CLI, 'push', 'origin', '--tag', 'v1.0.0', '--root', a], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
+    R.check('[PS-08] push --tag: 원격에 없는 태그를 올린다(원격 태그 = 로컬 태그)', tg1.status === 0 && /PUSHED/.test(tg1.stdout) && git(bare, 'rev-parse', 'v1.0.0^{}') === git(a, 'rev-parse', 'v1.0.0^{}'), `${tg1.status} ${tg1.stdout} ${tg1.stderr}`);
+    const tg2 = Push.push({ root: a, remote: 'origin', tag: 'v1.0.0' });
+    R.check('[PS-09] 같은 태그가 이미 같은 커밋이면 아무것도 하지 않는다', tg2.ok && !tg2.pushed && /already/.test(tg2.reason), tg2.reason);
+    git(b, 'fetch', '-q', 'origin'); git(b, 'tag', 'v2.0.0', 'origin/main'); git(b, 'push', '-q', 'origin', 'v2.0.0');
+    git(a, 'tag', 'v2.0.0', 'HEAD');
+    const remoteV2 = git(bare, 'rev-parse', 'v2.0.0');
+    const tg3 = Push.push({ root: a, remote: 'origin', tag: 'v2.0.0' });
+    R.check('[PS-10] 원격의 같은 이름 태그가 다른 커밋이면 거부(덮어쓰지 않는다)', tg3.refused && /different commit/.test(tg3.reason) && git(bare, 'rev-parse', 'v2.0.0') === remoteV2, tg3.reason);
+    let e11 = null; try { Push.push({ root: a, remote: 'origin', tag: 'v9.9.9' }); } catch (e) { e11 = e; }
+    R.check('[PS-11] 로컬에 없는 태그 → USAGE', e11 && e11.code === 'USAGE' && /no such tag/.test(e11.message), e11 && e11.message);
+
     // ── stop ──
     const r = path.join(base, 'repo');
     fs.mkdirSync(r); git(r, 'init', '-q', '-b', 'main'); cfg(r);

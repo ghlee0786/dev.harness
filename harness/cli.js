@@ -23,7 +23,7 @@ const USAGE = `usage:
   node harness/cli.js restore <id> [--skip-checks]
   node harness/cli.js gc [--json]
   node harness/cli.js stop <id>                 (the way to stop a running task: ends its process tree, commits work in progress, status interrupted)
-  node harness/cli.js push [<remote>] [<branch>] [--dry-run]   (only after the user explicitly asks; fast-forward only, never force, never harness/* branches)
+  node harness/cli.js push [<remote>] [<branch>] | push [<remote>] --tag <name> [--dry-run]   (only after the user explicitly asks; fast-forward only, never force, never harness/* branches)
   node harness/cli.js cleanup-legacy [--salvage] [--apply] [--json]   (leftovers of earlier harness versions; removes only what loses nothing — --salvage first keeps dirty/unmerged work at tags harness/salvage/* and copies files outside git; dry run unless --apply)
   node harness/cli.js install [--target <repo>] [--track-docs] | uninstall [--target <repo>]
       --track-docs: add a managed .gitignore block so docs/prds · docs/coordinations · docs/designs · docs/README.md are tracked by git
@@ -38,7 +38,7 @@ const USAGE = `usage:
 defaults: runtime claude · model opus · budget $20 · wall 120 min · max continuations 8 (with --runtime codex and no --model: Codex's own default model)`;
 
 const VALUE = new Set(['--check', '--runtime', '--model', '--effort', '--budget-usd', '--token-budget', '--wall-min', '--max-continuations', '--root', '--into', '--base', '--target', '--check-timeout-min', '--goal-file',
-  '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file']);
+  '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--tag']);
 const FLAGS = new Set(['--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs']);
 
 function parse(argv) {
@@ -101,7 +101,7 @@ async function main(argv, io) {
   if (cmd === 'push') {
     const Pu = require('./lib/push');
     try {
-      const r = Pu.push({ root, remote: rest[0], branch: rest[1], dryRun: !!o['dry-run'] });
+      const r = Pu.push({ root, remote: rest[0], branch: rest[1], tag: o.tag, dryRun: !!o['dry-run'] });
       out(o.json ? JSON.stringify(r, null, 2) : Pu.format(r));
       return r.ok ? 0 : 1;
     } catch (e) { err(`harness push: ${e.message}`); return e.code === 'USAGE' ? 2 : 1; }

@@ -25,7 +25,7 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | `go "<요청>"` | 자기 worktree 에서 끝까지 실행하고 보고서를 낸다 — `--goal-file` · `--check "<명령>"` · `--attach <파일>` · `--doc <문서>` · `--allow "<규칙>"` · `--runtime claude\|codex` |
 | `status` · `stop <id>` · `resume <id>` | 현황(누적 비용 · 겹침 · 주인 없는 변경) · 멈춤(진행분 커밋) · 이어 가기 |
 | `accept <id>` · `cancel <id>` · `restore <id>` | 받아들이기(`--no-ff` 병합 · 사용자가 말한 뒤에만 · 테스트와 린트를 다시 본다) · 취소(revert) · 되살리기 |
-| `push [<remote>] [<branch>]` | 빨리감기 push 만 — 사용자가 명시한 뒤에만 |
+| `push [<remote>] [<branch>]` · `push [<remote>] --tag <이름>` | 빨리감기 push · 릴리스 태그 push(덮어쓰지 않는다) — 사용자가 명시한 뒤에만 |
 | `doc new <prd\|coordination\|design> "<제목>"` | 요청할 때만 만드는 관리 문서 |
 | `report --kind <bug\|intent\|improve> --title … --body …` | 하네스 보고(아래) |
 | `update [--dry-run]` · `version` · `gc` · `cleanup-legacy` | 갱신 · 판 · 끝난 작업 정리 · 이전 하네스 잔여물 정리 |
@@ -79,7 +79,7 @@ bug_report: on                           # 하네스 보고 자동 발행(off �
 | `issue-triage.yml` | 이슈 열림 | `[auto]` 이슈에 `auto-report` · 종류(bug · intent · improve) 라벨 |
 | `self-hosted.yml` | 수동 실행 | 자체 러너(라벨 `self-hosted`)에서 같은 테스트 |
 
-- 릴리스: `git tag v5.1.0 && git push origin v5.1.0` → 사용하는 저장소에서 `node harness/cli.js update`.
+- 릴리스: `git tag v5.1.0` → `node harness/cli.js push origin --tag v5.1.0`(같은 이름 태그는 덮어쓰지 않는다) → 사용하는 저장소에서 `node harness/cli.js update`.
 - 자체 러너: 저장소 Settings → Actions → Runners → New self-hosted runner 의 안내대로 등록.
 
 ## 검증
