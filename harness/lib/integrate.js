@@ -42,6 +42,7 @@ const REFUSE_KO = [
   [/^target branch (\S+) is not checked out in any checkout(.*)$/s, m => `대상 브랜치 ${m[1]} 가 어느 체크아웃에도 열려 있지 않다 — 메인 체크아웃에서 열고 다시 하세요`],
   [/^checks fail after bringing (\S+) into (\S+) \((\d+) failing\)(.*)$/s, m => `${m[1]} 를 ${m[2]} 에 들인 뒤 검사가 실패한다(${m[3]}건) — 결과 브랜치에 ${m[1]} 가 들어 있다. resume 하거나 고친 뒤 다시 accept`],
   [/^lint fails on (\S+) \((.*?)\): (.*) — resume or fix it, then accept again$/s, m => `${m[1]} 에서 린트가 실패한다(${m[2]}): ${m[3]} — resume 하거나 고친 뒤 다시 accept`],
+  [/^the previous worktree (\S+) is still being removed(.*)$/s, m => `이전 worktree ${m[1]} 가 아직 지워지는 중이다(다른 프로세스가 파일을 잡고 있다) — 1분쯤 뒤 다시 accept`],
 ];
 const refuseKo = r => { for (const [re, fn] of REFUSE_KO) { const m = re.exec(String(r)); if (m) return fn(m); } return String(r); };
 const refused = (task, reason) => out(task, { refused: true, reason, report: isKo(task) ? `harness ${task.id} — 바뀐 것 없음: ${refuseKo(reason)}` : `harness ${task.id} — nothing changed: ${reason}` });
@@ -73,8 +74,22 @@ function locked(root, staleTask, pre, fn) {
   }), { waitMs: MERGE_WAIT_MS });
 }
 
-function ensureWorktree(root, task, P) {
-  if (fs.existsSync(P.wt) && G.worktreeRegistered(root, P.wt)) return;
+// 작업의 worktree 를 쓸 수 있게 한다 → 못 하면 거부 이유(문자열).
+//   [2026-10-14 자동 이슈 #1 · #2] resume 직후 accept — Windows 에서 worktree 삭제가 아직 진행 중이었다(등록은 남고 .git 파일은 지워졌고
+//   다른 프로세스가 잡은 파일이 남음). 그 폴더를 worktree 로 보고 커밋하려다 NOT_WORKTREE_ROOT 로 죽었다. 남은 파일이 사라질 때까지
+//   기다렸다가(지우지 않는다 — 깨끗할 때만 지우기 시작한 폴더라 내용은 브랜치에 있다) 새로 만들고, 끝내 남으면 거부한다.
+function ensureWorktree(root, task, P, waitMs) {
+  if (fs.existsSync(P.wt) && G.worktreeRegistered(root, P.wt)) {
+    if (G.isWorktreeRoot(P.wt, task.branch)) return null;
+    if (fs.existsSync(path.join(P.wt, '.git'))) return `${P.wt} is registered as this task's worktree but is not a working tree of ${task.branch} — inspect it`;
+    const until = Date.now() + (waitMs == null ? 120000 : waitMs);
+    for (;;) {
+      G.git(root, ['worktree', 'prune'], { allowFail: true });
+      if (G.removeEmptyDir(P.wt)) break;
+      if (Date.now() >= until) return `the previous worktree ${P.wt} is still being removed (another process still holds files in it) — wait a minute and run accept again`;
+      S.sleepSync(1000);
+    }
+  }
   G.git(root, ['worktree', 'prune'], { allowFail: true });
   G.addWorktree(root, P.wt, { branch: task.branch });
   task.worktree_include = G.copyWorktreeInclude(root, P.wt);
@@ -194,7 +209,8 @@ async function accept(o) {
     if (clash0.length) return refused(task, `uncommitted changes in ${co.path} touch files this task changed: ${clash0.join(', ')} — commit them first`);
 
     // 1. .harness/<id>/ 보관 → 삭제 커밋
-    ensureWorktree(root, task, P);
+    const wtWhy = ensureWorktree(root, task, P, o.removalWaitMs);
+    if (wtWhy) return refused(task, wtWhy);
     commitInto(task, P.wt, 'uncommitted work before accept');
     archivePlan(root, task, P);
 

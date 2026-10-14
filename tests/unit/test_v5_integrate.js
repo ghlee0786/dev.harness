@@ -337,6 +337,31 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     const a21 = await I.accept({ ...quiet, root: r21, id: t21.id });
     const c21 = await I.cancel({ ...quiet, root: r21, id: t21.id });
     R.check('[IN-21] 한국어 작업: accept · cancel 보고가 한국어(명령 · 해시는 원문)', /받아들임/.test(a21.report) && /되돌리기: node harness\/cli\.js cancel/.test(a21.report) && /취소/.test(c21.report) && !/^(merged|reverted|undo)/m.test(a21.report + '\n' + c21.report), `${a21.report}\n--\n${c21.report}`);
+
+    // ── [2026-10-14 자동 이슈 #1 · #2] resume 직후 accept — Windows 에서 worktree 삭제가 끝나지 않았다(등록은 남고 .git 파일은 지워졌고
+    //    파일 수천 개가 아직 지워지는 중). accept 가 NOT_WORKTREE_ROOT 예외로 죽었다(1분 뒤 다시 하면 성공). ──
+    const halfRemoved = (r, t) => {
+      const P = S.taskPaths(r, t.id);
+      git(r, ['worktree', 'add', '-q', P.wt, t.branch]);
+      fs.rmSync(path.join(P.wt, '.git'), { force: true });   // 등록은 남고 .git 파일만 먼저 사라진 상태
+      return P;
+    };
+    const r22 = mkRepo();
+    const t22 = await goDone(r22, work());
+    const P22 = halfRemoved(r22, t22);
+    // 남은 파일은 1초 뒤 사라진다(다른 프로세스가 핸들을 놓는 것을 흉내)
+    spawn(process.execPath, ['-e', `setTimeout(()=>require('fs').rmSync(${JSON.stringify(P22.wt)},{recursive:true,force:true}),1000)`], { stdio: 'ignore', windowsHide: true });
+    const a22 = await I.accept({ ...quiet, root: r22, id: t22.id, removalWaitMs: 15000 });
+    R.check('[IN-22] 삭제 중인 worktree 가 곧 비워지면 accept 는 기다렸다가 병합한다', a22.status === 'accepted' && !a22.refused && parents(r22, 'main') === 2, `${a22.status} ${a22.reason}`);
+    const r23 = mkRepo();
+    const t23 = await goDone(r23, work());
+    const P23 = halfRemoved(r23, t23);
+    const main23 = git(r23, ['rev-parse', 'main']);
+    let a23 = null, e23 = null;
+    try { a23 = await I.accept({ ...quiet, root: r23, id: t23.id, removalWaitMs: 500 }); } catch (e) { e23 = e; }
+    R.check('[IN-23] 삭제 중인 worktree 가 끝내 남아 있으면 예외 없이 거부하고 이유를 말한다 · main 그대로 · 남은 파일은 건드리지 않는다',
+      !e23 && a23 && a23.refused && /still being removed/.test(a23.reason) && git(r23, ['rev-parse', 'main']) === main23 && fs.existsSync(path.join(P23.wt, 'a.txt')),
+      e23 ? String(e23.stack).slice(0, 400) : `${a23 && a23.status} ${a23 && a23.reason}`);
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 임시 디렉터리 정리 실패는 결과와 무관 */ } }
   R.done();

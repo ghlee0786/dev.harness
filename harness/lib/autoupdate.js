@@ -47,9 +47,11 @@ function dirty(root) {
 }
 function commitUpdate(root, before, from, to) {
   const G = require('./git');
-  const tracked = new Set(G.git(root, ['ls-files', '--', 'harness'], { allowFail: true }).out.split(/\r?\n/).filter(Boolean));
-  if (!tracked.size) return null;   // 하네스를 추적하지 않는 저장소(로컬 전용) — 커밋할 것이 없다
-  const files = [...dirty(root)].filter(f => MANAGED.test(f) && !before.has(f));
+  // harness/ 를 추적하면 새로 생긴 하네스 파일까지, 아니면(로컬 전용) 이미 추적 중인 관리 파일(예: AGENTS.md)만 커밋한다.
+  //   [2026-10-13 실측 · .NET 저장소 3곳] AGENTS.md 만 추적하는 저장소에서 갱신된 관리 블록이 미커밋으로 남았다.
+  const tracked = new Set(G.git(root, ['ls-files'], { allowFail: true }).out.split(/\r?\n/).filter(Boolean));
+  const harnessTracked = [...tracked].some(f => f.startsWith('harness/'));
+  const files = [...dirty(root)].filter(f => MANAGED.test(f) && !before.has(f) && (harnessTracked || tracked.has(f)));
   if (!files.length) return null;
   G.git(root, ['add', '--', ...files], { retryLock: true });
   G.git(root, [...G.identityArgs(root), 'commit', '-q', '--no-verify', '-m', `chore(harness): 자동 갱신 ${from} → ${to}`, '--', ...files], { retryLock: true });

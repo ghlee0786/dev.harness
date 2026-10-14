@@ -64,6 +64,20 @@ const cli = (args, env) => new Promise(res => { const c = spawn(process.execPath
     R.check('[UP-07] 자동 갱신: 설치 · 하네스 파일만 커밋(메시지 "자동 갱신") · 사용자의 미커밋 README 는 그대로',
       u5.code === 0 && fs.readFileSync(path.join(repo2, 'harness', 'VERSION'), 'utf8').trim() === '9.9.9' && /자동 갱신/.test(files5[0]) && files5.includes('harness/VERSION') && !files5.includes('README.md') && /README\.md/.test(git(repo2, 'status', '--porcelain')),
       `${u5.code} ${u5.out.slice(-300)} | ${files5.join(',')} | ${git(repo2, 'status', '--porcelain')}`);
+    // [2026-10-13 실측 · .NET 저장소 3곳] AGENTS.md 는 추적하고 harness/ 는 무시하는 저장소 — 갱신된 관리 블록이 미커밋으로 남았다
+    const repo3 = path.join(base, 'agents-only'); fs.mkdirSync(repo3); git(repo3, 'init', '-q', '-b', 'main'); git(repo3, 'config', 'user.name', 't'); git(repo3, 'config', 'user.email', 't@example.invalid'); git(repo3, 'config', 'core.autocrlf', 'false');
+    fs.writeFileSync(path.join(repo3, '.gitignore'), 'harness/\n.claude/\n.codex/\n.agents/\n');
+    spawnSync(process.execPath, [CLI, 'install', '--root', repo3], { encoding: 'utf8', windowsHide: true, env });
+    const ag3 = path.join(repo3, 'AGENTS.md');
+    fs.writeFileSync(ag3, fs.readFileSync(ag3, 'utf8').replace('### 언어', '### 언어(옛 판)'));   // 옛 관리 블록
+    fs.writeFileSync(path.join(repo3, 'README.md'), '# t\n');
+    git(repo3, 'add', '-A'); git(repo3, 'commit', '-qm', 'init');
+    fs.writeFileSync(path.join(repo3, 'README.md'), '# t\nuser edit\n');
+    const u6 = await cli(['update', '--auto', '--root', repo3], env);
+    const files6 = git(repo3, 'show', '--name-only', '--format=%s', 'HEAD').split(/\r?\n/);
+    R.check('[UP-11] harness/ 를 추적하지 않아도 추적 중인 관리 파일(AGENTS.md)의 갱신은 커밋한다 · 사용자 README 는 그대로',
+      u6.code === 0 && /자동 갱신/.test(files6[0]) && files6.includes('AGENTS.md') && !files6.includes('README.md') && !/AGENTS\.md/.test(git(repo3, 'status', '--porcelain')) && /README\.md/.test(git(repo3, 'status', '--porcelain')),
+      `${u6.code} ${u6.out.slice(-300)} | ${files6.join(',')} | ${git(repo3, 'status', '--porcelain')}`);
 
     // 언제 확인하나 — 설치된 사본에서만 · 하루 한 번 · auto_update: off 면 안 한다(실제로 띄우는 대신 기록만 받는다)
     const AU = require('../../harness/lib/autoupdate');
