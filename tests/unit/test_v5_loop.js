@@ -426,6 +426,25 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     R.check('[LP-62] wait: 이미 끝난 작업은 바로 보고한다', wd2.status === 0 && /"status":"done"/.test(wd2.stdout), `${wd2.status} ${wd2.stdout.slice(-200)}`);
     }
 
+    // ── [2026-10-16 사용자 지시] 시작 때 묻지 않고 지시를 바탕으로 끝까지 스스로 판단 — 결과를 바꾼 갈림길만 완성 뒤 보고에 정리한다 ──
+    {
+      const DEC = '# 결정\n\n## 1. 날짜 형식\n- 선택지: ISO 8601 / 로캘 형식\n- 고른 것: ISO 8601\n- 이유: 기존 API 가 ISO 를 쓴다\n- 결과: 응답이 2026-10-16 형태 · 바꾸려면 formatDate 한 곳\n\n## 2. 빈 목록 처리\n- 고른 것: 빈 배열(오류 아님)\n- 이유: 호출부가 길이로 분기한다\n';
+      const rk = checkRepo();
+      const tk = await L.go({ ...quiet, root: rk, goal: '목록 응답에 날짜를 넣어 줘', checks: ['node check.js'], run: fake([o => { impl('good')(o); write(path.join(o.cwd, '.harness', path.basename(o.cwd), 'DECISIONS.md'), DEC); }]) });
+      const tkk = S.readTask(rk, tk.id);
+      R.check('[LP-70] 작업자가 쓴 DECISIONS.md 의 분기점을 작업에 기록한다(제목 · 내용) — worktree 를 지운 뒤에도 남는다',
+        tk.status === 'done' && tkk.decisions && tkk.decisions.length === 2 && tkk.decisions[0].title === '날짜 형식' && tkk.decisions[0].body.some(l => /ISO 8601/.test(l)), JSON.stringify(tkk.decisions));
+      R.check('[LP-71] 한국어 보고: 맨 위 요약 다음에 "결정 분기점 2곳" 과 각 분기점의 선택 · 이유가 있다',
+        /결정 분기점: 2곳/.test(tk.report) && /1\. 날짜 형식/.test(tk.report) && /고른 것: ISO 8601/.test(tk.report) && tk.report.indexOf('결정 분기점') < tk.report.indexOf('브랜치:'), tk.report.slice(0, 900));
+      const tn = await go(checkRepo(), { run: fake([impl('good')]) });
+      R.check('[LP-72] 갈림길이 없었으면 보고에 없다고 분명히 적는다', /decision points: none/.test(tn.report), tn.report.slice(0, 500));
+      const pr = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, language: 'Korean' });
+      // [2026-10-16 실측] PowerShell 도구의 파이프(`… | Select-String`)는 어떤 허용 규칙으로도 통과하지 않았다(PowerShell(*) 만) — Bash 파이프는 통과.
+      const prc = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, runtime: 'claude' });
+      R.check('[LP-74] 작업자 지시(Claude): 파이프 · 출력 거르기는 Bash 도구로 — PowerShell 파이프는 거부된다', /pipe/i.test(prc) && /Bash tool/.test(prc) && /PowerShell/.test(prc), prc.slice(-1500));
+      R.check('[LP-73] 작업자 지시: 묻지 말고 스스로 고르고, 결과를 바꾼 갈림길만 DECISIONS.md 에(선택지 · 고른 것 · 이유 · 결과)', /DECISIONS\.md/.test(pr) && /never ask/.test(pr) && /options/.test(pr) && /why/.test(pr), pr.slice(0, 1500));
+    }
+
     // ── [2026-09-30 실측 · Python 서비스 저장소] 전체 회귀 20분+ — 검사 상한은 프로젝트 블록에서, 기준선은 같은 기준 커밋이면 다시 쓴다 ──
     const counter = path.join(base, 'baseline-counter.txt');
     const COUNT_JS = `require('fs').appendFileSync(${JSON.stringify(counter)}, 'x\\n');console.log('# pass 1\\n# fail 0');`;

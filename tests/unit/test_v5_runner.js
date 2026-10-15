@@ -47,6 +47,11 @@ async function waitFile(f, ms) { const t0 = Date.now(); while (Date.now() - t0 <
     const missing = [];
     for (const sh of ['Bash', 'PowerShell']) for (const g of MUST_DENY) if (!deny.includes(`${sh}(${g}:*)`)) missing.push(`${sh}(${g})`);
     R.check('[RN-01] deny: push·merge·reset·rebase·checkout·switch·branch -D·clean·commit 을 Bash·PowerShell 모두', missing.length === 0, missing.join(', '));
+    // [2026-10-15 현장 감사] 작업자 셸 호출의 17% 가 거부 — 65% 는 출력을 줄이려 붙인 파이프(`dotnet build … | Select-String`) 때문이었다.
+    //   읽기 전용 필터는 허용한다(파일을 쓰거나 다른 명령을 실행하는 sed · find · xargs · awk · tee 는 넣지 않는다).
+    const FILTERS = ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'Select-String', 'Select-Object', 'Measure-Object', 'Sort-Object', 'Format-Table', 'Format-List', 'Out-String'];
+    R.check('[RN-01b] allow: 읽기 전용 파이프 필터(grep · head · tail · Select-String · Select-Object …)를 두 셸 모두', FILTERS.every(f => allow.includes(`Bash(${f}:*)`) && allow.includes(`PowerShell(${f}:*)`)), JSON.stringify(allow));
+    R.check('[RN-01b] allow: 쓰기 · 실행이 되는 도구(sed · find · xargs · awk · tee · ForEach-Object · Invoke-Expression)는 넣지 않는다', !allow.some(r => /\((sed|find|xargs|awk|tee|ForEach-Object|Invoke-Expression|iex|Set-Content|Out-File):/.test(r)), JSON.stringify(allow));
     R.check('[RN-01] allow 에 git 쓰기가 없다', !allow.some(r => /git (push|merge|reset|rebase|checkout|switch|branch|clean|commit)/.test(r)), JSON.stringify(allow));
     R.check('[RN-01] bypass 모드를 끈다', st.permissions.disableBypassPermissionsMode === 'disable');
     R.check('[RN-01] codexArgs = -s workspace-write, 위험 플래그 없음', JSON.stringify(policy.codexArgs()) === JSON.stringify(['-s', 'workspace-write']));

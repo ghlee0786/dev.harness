@@ -4,7 +4,7 @@ const money = x => '$' + (Number(x) || 0).toFixed(2);
 
 const AUTONOMY = [
   'Reversible actions (reading, editing files in this worktree, running builds and tests, installing dependencies locally) need no permission.',
-  'No human is available during this run, so never ask questions or wait for confirmation — decide with your best judgment, record the decision in PLAN.md, and proceed.',
+  'No human is available during this run, so never ask questions or wait for confirmation — decide with your best judgment and proceed; record each decision point in DECISIONS.md (see the working rules).',
   'Irreversible actions are forbidden: no git push, no merging or resetting branches, and no deleting files you did not create in this task.',
 ].join(' ');
 
@@ -65,6 +65,9 @@ function permissionLines(t) {
   out.push(`- Commands outside the allow list are refused automatically, because nobody is available to approve them. Do not work around a refusal (no other shells, wrappers, or copies of the command). If the goal itself needs such a command (for example, it must build or deploy something with it), write \`${rel}/BLOCKED.md\` listing the exact commands needed (one per line) and why, then stop — the user can resume the task with them allowed.`);
   // [평가 2026-10-02] 위 문장 때문에 테스트 실행이 거부되자 다 만든 작업을 BLOCKED 로 멈췄다(3/3) — 검증은 하네스가 한다.
   out.push(`- If a refused command was only to verify your work (running tests, linters or the program), do not write BLOCKED.md for it: finish the implementation and end your turn — the harness runs the checks itself after your turn and sends any failures back to you. With no checks, say in your final message what you could not run.`);
+  // [2026-10-15 현장 감사 · 10-16 실측] 작업자 셸 거부의 65% 가 출력을 거르는 파이프였다. PowerShell 도구의 파이프는 허용 규칙으로 통과시킬 수 없고
+  //   (전부 허용 PowerShell(*) 만 통과), Bash 도구의 파이프는 grep · head · tail 등으로 통과한다.
+  if (t.runtime !== 'codex') out.push('- To filter long output (`… 2>&1 | tail -40`, `| grep error`, `| head`), use the Bash tool: pipes into grep · head · tail · wc · sort · uniq · cut are allowed there. In the PowerShell tool any pipe (`| Select-String`, `| Select-Object`) is refused — run the command without the pipe, or use the Bash tool.');
   if (t.runtime === 'codex') out.push('- Your sandbox may refuse to start processes (for example `spawn EPERM` from `node --test` or a build tool). That is not a reason to stop either: the harness runs the checks outside the sandbox after your turn.');
   return out;
 }
@@ -91,6 +94,8 @@ function taskPrompt(t, o) {
     '# Working rules',
     `- Keep a living plan at \`${rel}/PLAN.md\`: goal, progress (checked items), decisions, discoveries, remaining work. A fresh session must be able to continue from that file and the git log alone.`,
     `- ${AUTONOMY}`,
+    // [2026-10-16 사용자 지시] 시작 때 묻지 않고 지시를 바탕으로 끝까지 스스로 판단한다 — 결과를 바꾼 갈림길만 완성 뒤 보고에 정리한다(하네스가 DECISIONS.md 를 읽는다).
+    `- Decision points: when you reach a fork that the goal and the repository do not settle — two or more reasonable options that change the result (behaviour, data or API shape, scope, dependencies, what the user sees) — never ask and never stop; pick the option that best fits the user's instructions and is easiest to change later, and keep going. Record each fork in \`${rel}/DECISIONS.md\` as a section: \`## <n>. <the fork in one line>\` followed by the lines \`- options: …\`, \`- chosen: …\`, \`- why: …\`, \`- effect: … (and how to change it later)\`. Only real forks — not routine implementation details. The harness shows them to the user when the work is done.`,
     ...(languageLine(t) ? [`- ${languageLine(t)}`] : []),
     `- If the task is impossible or the specification contradicts itself, write \`${rel}/BLOCKED.md\` explaining why and stop.`,
     '- Do not run git commands that write (commit, checkout, reset, merge, stash, branch). The harness commits after every turn.',
@@ -118,7 +123,7 @@ function failMessage(t, judged, excerpt, deadlineMs) {
 }
 
 function nudgeMessage(t) {
-  return `No human is available to answer. Use your best judgment, record the decision in .harness/${t.id}/PLAN.md, and continue until the goal is complete. If it truly cannot be done, write .harness/${t.id}/BLOCKED.md with the reason.`;
+  return `No human is available to answer. Use your best judgment, record the decision point in .harness/${t.id}/DECISIONS.md, and continue until the goal is complete. If it truly cannot be done, write .harness/${t.id}/BLOCKED.md with the reason.`;
 }
 
 // 러너 오류(crash · model)로 끝난 턴 — 판정하지 않고 같은 세션을 1회 이어 간다(H1).
@@ -131,7 +136,7 @@ function errorMessage(t, kind, why, deadlineMs) {
 // 변경이 하나도 없는 턴(H2) — 검사가 초록이어도 아무것도 안 했으면 끝이 아니다.
 function noChangeMessage(t) {
   return [`The harness sees no changes to the repository outside .harness/ — nothing has been done yet. No human is available to answer questions.`,
-    `Do the work the goal asks for now, record decisions in .harness/${t.id}/PLAN.md, and end your turn when it is complete. If it truly cannot be done, write .harness/${t.id}/BLOCKED.md with the reason.`].join('\n\n');
+    `Do the work the goal asks for now, record decision points in .harness/${t.id}/DECISIONS.md, and end your turn when it is complete. If it truly cannot be done, write .harness/${t.id}/BLOCKED.md with the reason.`].join('\n\n');
 }
 
 // added: 이번 resume 에서 사용자가 새로 허용한 규칙.

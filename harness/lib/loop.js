@@ -445,6 +445,7 @@ function finish(c, status, reason) {
     try { checkpoint(c, status, { throwOnError: true }); }
     catch (e) { task.commit_error = e.message; }
     try { task.outside_git = outsideGit(task, P.wt); } catch { /* 보고용 */ }
+    task.decisions = readDecisions(path.join(P.workDir, 'DECISIONS.md'));
   }
   try {
     if (task.base_commit && G.branchExists(root, task.branch)) {
@@ -477,6 +478,29 @@ function finish(c, status, reason) {
   return res;
 }
 
+// 작업자가 묻지 않고 고른 갈림길(.harness/<id>/DECISIONS.md 의 `## <n>. <분기점>` 절) → [{ title, body[] }]. 파일이 없으면 [] — 갈림길이 없었다.
+//   [2026-10-16 사용자 지시] 시작 때 묻지 않고 끝까지 스스로 판단하고, 어떤 분기점에서 무엇을 골라 어떻게 됐는지는 완성 뒤에 정리해 보인다.
+function readDecisions(file) {
+  let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  const out = [];
+  for (const sec of text.split(/^##[ \t]+/m).slice(1)) {
+    const lines = sec.split(/\r?\n/);
+    const title = lines[0].replace(/^\d+[.)][ \t]*/, '').trim().slice(0, 200);
+    if (title) out.push({ title, body: lines.slice(1).map(l => l.trim()).filter(Boolean).map(l => l.slice(0, 400)).slice(0, 8) });
+  }
+  if (!out.length && text.trim()) out.push({ title: '(형식 없이 적힌 결정)', body: text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !/^#/.test(l)).slice(0, 12) });
+  return out.slice(0, 30);
+}
+function decisionLines(task, ko) {
+  const d = task.decisions;
+  if (!Array.isArray(d)) return [];   // 이 기능 전의 작업
+  if (!d.length) return [ko ? '결정 분기점: 없음 — 지시와 저장소만으로 모든 선택이 정해졌다' : 'decision points: none — the instructions and the repository settled every choice'];
+  const out = [ko ? `결정 분기점: ${d.length}곳 — 작업자가 묻지 않고 고른 갈림길이다. 다르게 하려면 resume 으로 지시하거나 accept 뒤 고친다`
+    : `decision points: ${d.length} — forks the worker decided without asking. To change one, resume with an instruction or edit after accept`];
+  d.forEach((x, i) => { out.push(`  ${i + 1}. ${x.title}`); for (const l of x.body) out.push(`     ${l}`); });
+  return out;
+}
+
 function result(task) {
   const ch = task.checks || null, last = ch && (ch.last || null);
   return { id: task.id, status: task.status, reason: task.reason, branch: task.branch, commit: task.head || (task.commits || []).slice(-1)[0] || null,
@@ -487,7 +511,7 @@ function result(task) {
     files_changed: task.files_changed == null ? null : task.files_changed, tests_modified: task.tests_modified || [], checks_modified: task.checks_modified || [],
     secrets_excluded: task.secrets_excluded || [], commit_skipped: task.commit_skipped || [], outside_git: task.outside_git,
     worktree: task.worktree_kept ? task.worktree : null, worktree_kept: task.worktree_kept || null, merge_commit: task.merge_commit || null, revert_commit: task.revert_commit || null,
-    docs: task.docs || [] };
+    docs: task.docs || [], decisions: task.decisions || null };
 }
 
 const listOf = (a, n) => `${a.slice(0, n).join(', ')}${a.length > n ? ` … (+${a.length - n})` : ''}`;
@@ -586,7 +610,7 @@ function reasonKo(r) {
 function reportKo(task, P) {
   const s = task.spent, c = task.caps, ch = task.checks || { source: 'none', commands: [] };
   const cli = 'node harness/cli.js';
-  const L = [`harness ${task.id} — ${task.status.toUpperCase()}`, ...summaryKo(task), `이유: ${reasonKo(task.reason)}`];
+  const L = [`harness ${task.id} — ${task.status.toUpperCase()}`, ...summaryKo(task), `이유: ${reasonKo(task.reason)}`, ...decisionLines(task, true)];
   L.push(`브랜치: ${task.branch}${task.head ? ` @ ${task.head.slice(0, 10)}` : ''} (${task.base_branch || 'detached HEAD'} @ ${String(task.base_commit || '').slice(0, 10)} 에서) — 사용자 브랜치는 그대로다.`);
   if (!ch.commands.length) L.push('검사: 없음 — 신뢰할 검사가 이 작업을 판정하지 않았다. 결과는 모델의 보고에만 기대고 있다.');
   else {
@@ -615,7 +639,7 @@ function reportKo(task, P) {
   const money = task.runtime === 'codex' ? 'Codex 는 비용(USD)을 알려 주지 않는다' : `${Pr.money(s.cost_usd)} / 예산 ${Pr.money(c.budget_usd)}`;
   L.push(`사용: ${money}${unknown ? ` (+ 비용을 모르는 호출 ${unknown}회 — 셈에 없음)` : ''}${s.tokens ? ` · 토큰 ${s.tokens}${c.token_budget ? ` / ${c.token_budget}` : ''}` : ''} · 이어 가기 ${s.continuations} / ${c.max_continuations} · ${(s.wall_ms / 60000).toFixed(1)}분 / ${c.wall_min}분`);
   L.push(task.worktree_kept ? `작업 폴더(worktree) 남김: ${task.worktree} (${task.worktree_kept})` : '작업 폴더(worktree): 지움 — 모두 브랜치에 커밋됐다');
-  L.push(`계획: 브랜치의 .harness/${task.id}/PLAN.md · 기록: ${P.logFile}`);
+  L.push(`계획: 브랜치의 .harness/${task.id}/PLAN.md · 결정: DECISIONS.md · 기록: ${P.logFile}`);
   if ((task.attachments || []).length) L.push(`첨부(git 밖 · ${path.join(P.dir, 'attachments', 'INDEX.md')}): ${task.attachments.map(a => `${a.name} [${KIND_KO[a.kind] || a.kind}${a.frames.length ? ` · ${a.frames.length}장` : ''}${a.transcript ? ' · 전사' : ''}${a.notes.length ? ` · 참고 ${a.notes.length}건` : ''}]`).join(', ')}`);
   if ((task.docs || []).length) L.push(`명세 문서(메인 체크아웃에서 읽음 · accept 때 이 작업과 연결): ${task.docs.join(', ')}`);
   if ((task.allow || []).length) L.push(`이 작업에 허용한 명령(go --allow · worker_allow): ${task.allow.join(', ')}${task.runtime === 'codex' ? ' — Codex 에는 효과 없음(샌드박스가 정한다)' : ''}`);
@@ -645,7 +669,7 @@ function reportKo(task, P) {
 function report(task, P) {
   if (task.language === 'Korean') return reportKo(task, P);
   const s = task.spent, c = task.caps, ch = task.checks || { source: 'none', commands: [] };
-  const lines = [`harness ${task.id} — ${task.status.toUpperCase()}`, ...summaryKo(task), `why: ${task.reason}`];
+  const lines = [`harness ${task.id} — ${task.status.toUpperCase()}`, ...summaryKo(task), `why: ${task.reason}`, ...decisionLines(task, false)];
   lines.push(`branch: ${task.branch}${task.head ? ` @ ${task.head.slice(0, 10)}` : ''} (from ${task.base_branch || 'detached HEAD'} @ ${String(task.base_commit || '').slice(0, 10)}) — your branch is untouched.`);
   if (!ch.commands.length) lines.push('checks: none found — no trusted check judged this work; the result rests on the model\'s own report.');
   else {
@@ -675,7 +699,7 @@ function report(task, P) {
   const money = task.runtime === 'codex' ? 'cost in USD not reported by Codex' : `${Pr.money(s.cost_usd)} of ${Pr.money(c.budget_usd)}`;
   lines.push(`spent: ${money}${unknown ? ` (+ cost unknown for ${unknown} call${unknown > 1 ? 's' : ''} — not counted)` : ''}${s.tokens ? ` · ${s.tokens} tokens${c.token_budget ? ` of ${c.token_budget}` : ''}` : ''} · ${s.continuations} continuations of ${c.max_continuations} · ${(s.wall_ms / 60000).toFixed(1)} min of ${c.wall_min}`);
   lines.push(task.worktree_kept ? `worktree kept: ${task.worktree} (${task.worktree_kept})` : 'worktree: removed (everything is committed on the branch)');
-  lines.push(`plan: .harness/${task.id}/PLAN.md on the branch · log: ${P.logFile}`);
+  lines.push(`plan: .harness/${task.id}/PLAN.md on the branch · decisions: DECISIONS.md · log: ${P.logFile}`);
   if ((task.attachments || []).length) lines.push(`attachments (outside git; ${path.join(P.dir, 'attachments', 'INDEX.md')}): ${task.attachments.map(a => `${a.name} [${a.kind}${a.frames.length ? ` · ${a.frames.length} frames` : ''}${a.transcript ? ' · transcript' : ''}${a.notes.length ? ' · ' + a.notes.length + ' note(s)' : ''}]`).join(', ')}`);
   if ((task.docs || []).length) lines.push(`spec documents (read from the main checkout; linked to this task on accept): ${task.docs.join(', ')}`);
   if ((task.allow || []).length) lines.push(`allowed for this task (go --allow · worker_allow): ${task.allow.join(', ')}${task.runtime === 'codex' ? ' — no effect on Codex (its sandbox governs what runs)' : ''}`);

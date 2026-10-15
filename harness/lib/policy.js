@@ -17,6 +17,11 @@ const REPO_KIND_PROGRAMS = {
 };
 
 const READONLY_GIT = ['git status', 'git diff', 'git log', 'git show'];
+// 읽기 전용 파이프 필터 — 출력을 줄이려고 붙이는 것들. Claude Code 는 파이프의 각 토막을 따로 보므로 하나라도 허용 밖이면 명령 전체가 거부된다.
+//   [2026-10-15 현장 감사] 작업자 셸 호출의 17% 가 거부 · 그 65% 가 `dotnet build … | Select-String` 같은 파이프 — 빌드 · 테스트 확인이 108번 막혔다.
+//   파일을 쓰거나 다른 명령을 실행하는 도구(sed -i · find -exec · xargs · awk · tee · ForEach-Object)는 넣지 않는다.
+const READONLY_FILTERS = ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut',
+  'Select-String', 'Select-Object', 'Measure-Object', 'Sort-Object', 'Format-Table', 'Format-List', 'Out-String'];
 // git 쓰기(설계 §3 목록) + 같은 효과의 이웃들. 접두 규칙이라 `git restore <file>` 같은 무해한 쓰임도 막히지만,
 //   워커는 Edit 로 되돌리면 된다 — git 상태는 하네스만 바꾼다(stash 는 하네스 커밋이 변경을 못 보게 숨긴다).
 const DENY_GIT = [
@@ -102,7 +107,7 @@ function checkAllowRules(list, where) {
 // extraAllow: 사용자가 준 규칙(go --allow · worker_allow) — 다시 검증해 금지 규칙은 버리고 allow 끝에 덧붙인다. deny 는 바꾸지 않는다.
 function claudeSettings(allowCommands, extraAllow) {
   const progs = [...new Set((allowCommands || []).map(String).filter(n => SAFE_NAME.test(n) && !isNeverAllowed(n)))];
-  const base = [...rules(progs), ...rules(READONLY_GIT)];
+  const base = [...rules(progs), ...rules(READONLY_GIT), ...rules(READONLY_FILTERS)];
   const extra = [...new Set((extraAllow || []).map(x => String(x).trim()).filter(x => !validateAllowRule(x) && !base.includes(x)))];
   return {
     permissions: {
