@@ -17,6 +17,9 @@ const USAGE = `usage:
   node harness/cli.js resume <id> [--allow "<rule>"]... [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--model M] [--effort E]
       caps are totals for the whole task (not additions): pass the new total, e.g. --budget-usd 40 after $20 was spent
       a blocked task resumes in the same session: its BLOCKED.md is kept as BLOCKED.<n>.md and the worker is told what you allowed
+      --detach (go · resume): run the task in a process detached from this shell and return its id at once — agent shells have time limits
+                              that would end the task with them; then: node harness/cli.js wait <id>
+  node harness/cli.js wait <id> [--timeout-min N]   (waits until the task is no longer running, then prints its report · exit 3 if still running at the limit)
   node harness/cli.js status [--json]
   node harness/cli.js accept <id> [--into <branch>] [--force] [--budget-usd N]   (only after the user accepts the result; --force for tasks not 'done')
   node harness/cli.js cancel <id> [--skip-checks]
@@ -38,8 +41,8 @@ const USAGE = `usage:
 defaults: runtime claude · model opus · budget $20 · wall 120 min · max continuations 8 (with --runtime codex and no --model: Codex's own default model)`;
 
 const VALUE = new Set(['--check', '--runtime', '--model', '--effort', '--budget-usd', '--token-budget', '--wall-min', '--max-continuations', '--root', '--into', '--base', '--target', '--check-timeout-min', '--goal-file',
-  '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--tag']);
-const FLAGS = new Set(['--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs']);
+  '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--tag', '--timeout-min']);
+const FLAGS = new Set(['--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs', '--detach']);
 
 function parse(argv) {
   const o = { _: [], checks: [], docs: [], allow: [], attach: [] };
@@ -169,6 +172,9 @@ async function main(argv, io) {
     } catch (e) { err(`harness ${cmd}: ${e.message}`); return 1; }
   }
 
+  if (o.detach && (cmd === 'go' || cmd === 'resume')) return detach(cmd, argv, rest, root, io, out, err);
+  if (cmd === 'wait') return waitFor(rest[0], o, root, out, err);
+
   // task id 는 진입점에서 형식을 강제한다(L5) — `resume ..\..\x` 같은 경로가 상태 디렉터리 밖을 가리키지 않게.
   const needId = () => {
     const id = rest[0];
@@ -193,7 +199,10 @@ async function main(argv, io) {
       goal = String(goal).replace(/^\uFEFF/, '').trim();
       if (!goal) { err(`go needs a goal\n${USAGE}`); return 2; }
       // --doc 경로는 부른 곳(cwd) 기준 — 루프는 저장소 상대로 바꿔 기록한다.
-      r = await require('./lib/loop').go({ ...common, ...caps, goal, checks: o.checks, runtime: o.runtime, base: o.base, init: !!o.init, docs: o.docs.map(p => path.resolve(p)), allow: o.allow, attach: o.attach.map(p => path.resolve(p)) });
+      // --detach 가 띄운 프로세스는 부모가 정한 id 를 쓴다(부모가 그 id 로 시작을 확인한다). 손자 프로세스에 물려주지 않는다.
+      const S = require('./lib/state'), presetId = S.validId(process.env.HARNESS_TASK_ID) ? process.env.HARNESS_TASK_ID : undefined;
+      delete process.env.HARNESS_TASK_ID;
+      r = await require('./lib/loop').go({ ...common, ...caps, id: presetId, goal, checks: o.checks, runtime: o.runtime, base: o.base, init: !!o.init, docs: o.docs.map(p => path.resolve(p)), allow: o.allow, attach: o.attach.map(p => path.resolve(p)) });
     } else if (cmd === 'resume') r = await require('./lib/loop').resume({ ...common, ...caps, id: needId(), allow: o.allow });
     else if (cmd === 'accept') r = await require('./lib/integrate').accept({ ...common, id: needId(), into: o.into, budgetUsd: o.budgetUsd, force: !!o.force });
     else if (cmd === 'cancel') r = await require('./lib/integrate').cancel({ ...common, id: needId(), skipChecks: !!o['skip-checks'] });
@@ -210,6 +219,87 @@ async function main(argv, io) {
   out(r.report || `harness ${r.id} — ${r.status}${r.reason ? ': ' + r.reason : ''}`);
   out(resultLine(r));
   return !r.refused && OK.has(r.status) ? 0 : 1;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// go/resume --detach — 작업을 이 셸과 분리된 프로세스로 띄우고, 그 프로세스가 작업을 잡은 것을 확인한 뒤 id 를 돌려준다.
+//   [2026-10-02 · 2026-10-15 실측] 세션이 go 를 백그라운드 셸로 띄우면 셸의 시간 상한(Claude Code 30분)에 작업이 함께 죽어
+//   running · 주인 없음으로 남았다(그 뒤 resume · 남은 worktree 문제로 번졌다). 출력은 <git-common-dir>/harness/detached/<id>.log.
+async function detach(cmd, argv, rest, root, io, out, err) {
+  const S = require('./lib/state');
+  let main;
+  try { main = S.mainRoot(root); } catch (e) { err(`--detach needs an existing git repository (${e.message}) — run go --init once without --detach`); return 2; }
+  const id = cmd === 'go' ? S.newId() : rest[0];
+  if (!S.validId(id)) { err(`${cmd} needs a task id\n${USAGE}`); return 2; }
+  const dir = path.join(S.paths(main).harnessDir, 'detached');
+  fs.mkdirSync(dir, { recursive: true });
+  const args = argv.filter(a => a !== '--detach');
+  const env = { ...process.env };
+  if (cmd === 'go') {
+    env.HARNESS_TASK_ID = id;
+    // 분리된 프로세스에는 stdin 이 없다 — "-"(stdin) 목표는 파일로 넘긴다.
+    if (rest.length === 1 && rest[0] === '-') {
+      const goalFile = path.join(dir, `${id}.goal.txt`);
+      fs.writeFileSync(goalFile, (io && typeof io.stdin === 'string') ? io.stdin : fs.readFileSync(0, 'utf8'));
+      args.splice(args.indexOf('-'), 1, '--goal-file', goalFile);
+    }
+  }
+  const logFile = path.join(dir, `${id}.log`);
+  const fd = fs.openSync(logFile, 'a');
+  const { spawn } = require('node:child_process');
+  const c = spawn(process.execPath, [__filename, ...args], { cwd: process.cwd(), env, detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
+  fs.closeSync(fd);
+  let exited = null;
+  c.on('exit', code => { exited = code; });
+  c.unref();
+  // 그 프로세스가 작업을 잡을 때까지(running · 주인 = 그 pid) — 먼저 끝나면(사용법 오류 · 거부 · 아주 짧은 작업) 그 출력을 그대로 전한다.
+  for (const until = Date.now() + 120000; Date.now() < until;) {
+    const t = S.readTask(main, id);
+    if (t && t.status === 'running' && t.owner && t.owner.pid === c.pid) {
+      out(`harness ${id} — 분리된 프로세스(pid ${c.pid})에서 실행 중 · 로그 ${logFile}\n  끝날 때까지 기다려 보고 받기: node harness/cli.js wait ${id} · 멈추기: node harness/cli.js stop ${id}`);
+      out(resultLine({ id, status: 'running' }));
+      return 0;
+    }
+    if (exited !== null) {
+      let log = ''; try { log = fs.readFileSync(logFile, 'utf8'); } catch { /* 없음 */ }
+      out(log.trim() || `harness ${id} — the detached process exited (${exited}) before starting the task`);
+      return exited === 0 ? 0 : (exited || 1);
+    }
+    await sleep(200);
+  }
+  err(`harness ${id} — the detached process (pid ${c.pid}) has not started the task after 2 minutes; see ${logFile}`);
+  return 1;
+}
+
+// wait <id> — 작업이 끝날 때까지(running 이 아니게 될 때까지) 기다렸다가 보고를 낸다. 이 명령이 죽어도 작업은 계속된다.
+async function waitFor(id, o, root, out, err) {
+  const S = require('./lib/state'), L = require('./lib/loop');
+  if (!S.validId(id)) { err(`wait needs a task id\n${USAGE}`); return 2; }
+  const main = S.mainRoot(root);
+  const limitMin = o['timeout-min'] != null ? Number(o['timeout-min']) : Infinity;
+  const until = Date.now() + (Number.isFinite(limitMin) && limitMin >= 0 ? limitMin * 60000 : Infinity);
+  for (;;) {
+    const t = S.readTask(main, id);
+    if (!t) { err(`unknown task: ${id}`); return 1; }
+    if (!(t.status === 'running' && t.owner && S.ownerAlive(t.owner))) {
+      if (t.status === 'running') {
+        out(`harness ${id} — running · OWNER DEAD: the process running it is gone. Continue it: node harness/cli.js resume ${id} --detach`);
+        out(resultLine({ ...L.result(t), status: 'running', reason: 'owner dead' }));
+        return 1;
+      }
+      const r = L.result(t);
+      out(L.report(t, S.taskPaths(main, id)));
+      out(resultLine(r));
+      return OK.has(t.status) ? 0 : 1;
+    }
+    if (Date.now() >= until) {
+      out(`harness ${id} — still running · wait again: node harness/cli.js wait ${id}`);
+      out(resultLine({ id, status: 'running' }));
+      return 3;
+    }
+    await sleep(2000);
+  }
 }
 
 // doc <sub> — 관리 문서(prd · coordination · design). 사용자가 요청할 때만 만든다. 사용법 오류 2 · 그 밖의 실패 1 · check 문제 1.

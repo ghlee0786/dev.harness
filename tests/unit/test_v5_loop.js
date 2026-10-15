@@ -406,6 +406,26 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     const cliStalled = spawnSync(process.execPath, [CLI, 'resume', c.id, '--root', r3], { encoding: 'utf8', windowsHide: true, env: { ...process.env, HARNESS_RUNNER_MODULE: fakeMod }, timeout: 30000 });
     R.check('[LP-15] CLI resume(stalled → 더 해서 done): exit 0', cliStalled.status === 0 && /"status":"done"/.test(cliStalled.stdout), `${cliStalled.status} ${cliStalled.stdout.slice(-300)} ${cliStalled.stderr.slice(-300)}`);
 
+    // ── [2026-10-02 · 2026-10-15 실측] 세션이 go 를 백그라운드 셸로 띄우면 셸의 시간 상한에 작업이 함께 죽었다(running · 주인 없음).
+    //    --detach: 셸과 분리된 프로세스로 띄우고 id 를 바로 돌려준다 · wait <id>: 끝날 때까지 기다려 보고를 낸다(wait 가 죽어도 작업은 산다). ──
+    {
+    const slowMod = path.join(base, 'slow-runner.js');
+    write(slowMod, `const fs=require('fs'),p=require('path');exports.run=async o=>{await new Promise(r=>setTimeout(r,1500));fs.writeFileSync(p.join(o.cwd,'impl.txt'),'good');return{ok:true,session_id:o.newSessionId,final_text:'ok',cost_usd:0.25,is_error:false,error_kind:null,permission_denials:[]};};`);
+    const rd = checkRepo();
+    const td = Date.now();
+    const dd = spawnSync(process.execPath, [CLI, 'go', '-', '--detach', '--check', 'node check.js', '--root', rd], { input: 'make it "good" $(x)', encoding: 'utf8', windowsHide: true, env: { ...process.env, HARNESS_RUNNER_MODULE: slowMod }, timeout: 60000 });
+    const jd = (() => { try { return JSON.parse((dd.stdout.split(/\r?\n/).find(l => l.startsWith('HARNESS_RESULT ')) || '').slice(15)); } catch { return null; } })();
+    const taskd = jd && S.readTask(rd, jd.id);
+    R.check('[LP-60] go --detach: 작업이 끝나기 전에 id 와 running 을 돌려준다(exit 0) · 주인은 다른 프로세스 · 목표 원문(stdin) 그대로',
+      dd.status === 0 && jd && jd.status === 'running' && taskd && taskd.owner && taskd.owner.pid !== dd.pid && taskd.goal === 'make it "good" $(x)' && Date.now() - td < 30000,
+      `${dd.status} ${dd.stdout.slice(-300)} ${dd.stderr.slice(-300)}`);
+    const wd = jd ? spawnSync(process.execPath, [CLI, 'wait', jd.id, '--root', rd], { encoding: 'utf8', windowsHide: true, timeout: 90000 }) : { status: null, stdout: '', stderr: 'no id' };
+    R.check('[LP-61] wait <id>: 끝날 때까지 기다려 보고와 HARNESS_RESULT(done)를 낸다 · exit 0', wd.status === 0 && /"status":"done"/.test(wd.stdout),
+      `${wd.status} ${wd.stdout.slice(-300)} ${wd.stderr.slice(-300)}`);
+    const wd2 = spawnSync(process.execPath, [CLI, 'wait', c.id, '--root', r3, '--timeout-min', '0.01'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    R.check('[LP-62] wait: 이미 끝난 작업은 바로 보고한다', wd2.status === 0 && /"status":"done"/.test(wd2.stdout), `${wd2.status} ${wd2.stdout.slice(-200)}`);
+    }
+
     // ── [2026-09-30 실측 · Python 서비스 저장소] 전체 회귀 20분+ — 검사 상한은 프로젝트 블록에서, 기준선은 같은 기준 커밋이면 다시 쓴다 ──
     const counter = path.join(base, 'baseline-counter.txt');
     const COUNT_JS = `require('fs').appendFileSync(${JSON.stringify(counter)}, 'x\\n');console.log('# pass 1\\n# fail 0');`;

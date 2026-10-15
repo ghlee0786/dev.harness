@@ -362,6 +362,33 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     R.check('[IN-23] 삭제 중인 worktree 가 끝내 남아 있으면 예외 없이 거부하고 이유를 말한다 · main 그대로 · 남은 파일은 건드리지 않는다',
       !e23 && a23 && a23.refused && /still being removed/.test(a23.reason) && git(r23, ['rev-parse', 'main']) === main23 && fs.existsSync(path.join(P23.wt, 'a.txt')),
       e23 ? String(e23.stack).slice(0, 400) : `${a23 && a23.status} ${a23 && a23.reason}`);
+
+    // ── [2026-10-14 자동 이슈 #3] accept 가 새로 만든 worktree 에서 린트를 복원 없이 돌려 거절 — 루프에서는 빌드 산출물(obj/)이 있어 통과했다.
+    //    작업 뒤 브랜치가 그대로이고 대상 브랜치를 들이지 않았으면 루프의 린트 통과를 그대로 쓴다. ──
+    const NEEDS_RESTORE = "if(!require('fs').existsSync('obj/restored.flag')){console.log('error: assets file not found; run restore');process.exit(1)}";
+    const r24 = mkRepo({ files: { 'lint.js': NEEDS_RESTORE, '.gitignore': 'obj/\n', 'AGENTS.md': '```yaml\nlint_command: "node lint.js {files}"\n```\n' } });
+    const t24 = await L.go({ ...quiet, root: r24, goal: 'add the feature', checks: ['node check.js'], run: fake([o => {
+      write(path.join(o.cwd, 'obj', 'restored.flag'), 'x');   // 검사(빌드)가 남긴 복원 산출물 흉내
+      write(path.join(o.cwd, 'feature.txt'), 'feature\n');
+    }]) });
+    const a24 = await I.accept({ ...quiet, root: r24, id: t24.id });
+    R.check('[IN-24] 작업 뒤 바뀐 것이 없으면 accept 는 루프에서 통과한 린트를 다시 돌리지 않는다(복원 없는 새 worktree 에서 거절되지 않는다)',
+      t24.status === 'done' && a24.status === 'accepted' && !a24.refused, `${t24.status} ${t24.reason} | ${a24.status} ${a24.reason}`);
+
+    // ── [2026-10-15 자동 이슈 #5] resume 도 같은 자리 — 예전 worktree 폴더(등록은 이미 지워짐 · 파일은 아직 지워지는 중)에
+    //    worktree add 를 해 "already exists" 예외로 죽었다. 기다렸다가 이어 가고, 끝내 남으면 interrupted 로 이유를 말한다. ──
+    const leftover = (r, t) => { const P = halfRemoved(r, t); git(r, ['worktree', 'prune']); const tk = S.readTask(r, t.id); tk.status = 'interrupted'; S.writeTask(r, tk); return P; };
+    const r25 = mkRepo();
+    const t25 = await goDone(r25, work());
+    const P25 = leftover(r25, t25);
+    let e25 = null, s25 = null;
+    try { s25 = await L.resume({ ...quiet, root: r25, id: t25.id, run: work(), removalWaitMs: 500 }); } catch (e) { e25 = e; }
+    R.check('[IN-25] resume: 지워지는 중인 예전 worktree 가 끝내 남으면 예외 없이 interrupted · 이유를 말한다 · 남은 파일은 건드리지 않는다',
+      !e25 && s25 && s25.status === 'interrupted' && /still being removed/.test(s25.reason) && fs.existsSync(path.join(P25.wt, 'a.txt')),
+      e25 ? String(e25.stack).slice(0, 400) : `${s25 && s25.status} ${s25 && s25.reason}`);
+    spawn(process.execPath, ['-e', `setTimeout(()=>require('fs').rmSync(${JSON.stringify(P25.wt)},{recursive:true,force:true}),1000)`], { stdio: 'ignore', windowsHide: true });
+    const s26 = await L.resume({ ...quiet, root: r25, id: t25.id, run: work(), removalWaitMs: 15000 });
+    R.check('[IN-26] resume: 남은 파일이 곧 사라지면 기다렸다가 이어 간다', s26.status === 'done', `${s26.status} ${s26.reason}`);
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 임시 디렉터리 정리 실패는 결과와 무관 */ } }
   R.done();

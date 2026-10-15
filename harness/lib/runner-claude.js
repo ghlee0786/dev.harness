@@ -119,9 +119,23 @@ function toResult(p, j, o, sid, mode) {
   return r;
 }
 
+// 강제 종료(stop · 세션 종료)된 작업자는 finally 에 닿지 못해 --settings 임시 파일이 남는다 — 주인이 죽은 것은 다음 실행이 치운다.
+function sweepOrphanSettings(dir) {
+  const d = dir || os.tmpdir();
+  let names = []; try { names = fs.readdirSync(d); } catch { return []; }
+  const gone = [];
+  for (const n of names) {
+    const m = /^harness-claude-settings-(\d+)-[0-9a-f]+\.json$/.exec(n);
+    if (!m || require('./state').pidAlive(Number(m[1]))) continue;
+    try { fs.rmSync(path.join(d, n), { force: true }); gone.push(n); } catch { /* 다음에 */ }
+  }
+  return gone;
+}
+
 async function run(o) {
   const sid = o.sessionId ? null : (o.newSessionId || crypto.randomUUID());
   if (sid && !UUID.test(sid)) throw Object.assign(new TypeError(`newSessionId 는 UUID 여야 한다: ${sid}`), { code: 'BAD_SESSION_ID' });
+  sweepOrphanSettings();
   const settingsFile = path.join(os.tmpdir(), `harness-claude-settings-${process.pid}-${crypto.randomBytes(6).toString('hex')}.json`);
   let bin;
   try { bin = exe.resolve('claude', o.exe); }
@@ -141,4 +155,4 @@ async function run(o) {
   }
 }
 
-module.exports = { run, buildArgs, parseResult, toResult, classify, costOf, costModeFor, QUOTA, AUTH };
+module.exports = { sweepOrphanSettings, run, buildArgs, parseResult, toResult, classify, costOf, costModeFor, QUOTA, AUTH };

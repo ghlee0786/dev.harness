@@ -49,13 +49,29 @@ function runFile(file, timeoutMs) {
   });
 }
 
+// 테스트가 중간에 끊기면(세션 종료 · 강제 종료) finally 의 정리가 돌지 않아 임시 폴더가 남는다 — 다음 실행이 치운다.
+//   동시에 도는 다른 실행의 폴더를 지우지 않도록 6시간 넘은 것만.
+const STALE_TMP_MS = 6 * 3600 * 1000;
+function sweepStaleTmp(dir, now) {
+  const d = dir || os.tmpdir(), gone = [];
+  let names = []; try { names = fs.readdirSync(d); } catch { return gone; }
+  for (const n of names) {
+    if (!/^harness-(v5-[a-z]+|eval-test)-[A-Za-z0-9]{6}$/.test(n)) continue;
+    const f = path.join(d, n);
+    try { if ((now || Date.now()) - fs.statSync(f).mtimeMs < STALE_TMP_MS) continue; fs.rmSync(f, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); gone.push(n); } catch { /* 다음에 */ }
+  }
+  return gone;
+}
+
 async function main() {
+  const swept = sweepStaleTmp();
+  if (swept.length) console.log(`[tests] 끊긴 이전 실행의 임시 폴더 ${swept.length}개를 치웠다`);
   const filters = process.argv.slice(2).filter(a => !a.startsWith('--')).map(a => path.basename(a));
   const dir = path.join(__dirname, 'unit');
   let files = fs.readdirSync(dir).filter(f => f.endsWith('.js') && !f.startsWith('_')).sort();
   if (filters.length) files = files.filter(f => filters.some(x => f.includes(x)));
   const jobs = Math.max(2, Math.min(8, Math.floor(os.cpus().length / 2)));
-  const timeoutMs = Number(process.env.HARNESS_TEST_FILE_TIMEOUT_MS) || 300000;
+  const timeoutMs = Number(process.env.HARNESS_TEST_FILE_TIMEOUT_MS) || 600000;   // 실제 작업(.NET 빌드 등)이 함께 도는 PC 에서는 loop 테스트가 300초를 넘겼다
   console.log(`[tests] ${files.length}개 파일 · 동시 ${jobs} · 파일당 상한 ${Math.round(timeoutMs / 1000)}초`);
   const t0 = Date.now(), results = [];
   let next = 0;
@@ -80,4 +96,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { makeReporter };
+module.exports = { makeReporter, sweepStaleTmp };

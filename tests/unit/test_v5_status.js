@@ -14,7 +14,8 @@ const CLI = path.resolve(__dirname, '..', '..', 'harness', 'cli.js');
 const write = (f, t) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); };
 const read = f => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
 const git = (cwd, args) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }); return (r.stdout || '').trim(); };
-const deadPid = () => Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout);
+// 끝난 프로세스의 pid 는 부하가 크면 곧 재사용된다(Windows) — 어느 OS 에서도 배정되지 않는 큰 값(4의 배수).
+const deadPid = () => 99999996;
 const quiet = { log: () => {} };
 const edits = files => async o => { for (const [f, t] of Object.entries(files)) write(path.join(o.cwd, f), t); return { session_id: o.newSessionId, cost_usd: 0.2 }; };
 const goEdit = (root, files, goal) => L.go({ ...quiet, root, goal: goal || 'edit', run: edits(files) });

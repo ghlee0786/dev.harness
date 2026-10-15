@@ -285,6 +285,23 @@ function removeEmptyDir(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); return !fs.existsSync(dir); } catch { return false; }
 }
 
+// 작업 worktree 자리를 쓸 수 있게 비운다 → null(비었거나 이미 그 브랜치의 worktree) | 못 비운 이유(문자열).
+//   [2026-10-14~15 자동 이슈 #1 · #2 · #5] Windows 에서 다른 프로세스가 파일을 잡고 있으면 worktree 삭제가 늦게 끝난다 —
+//   등록은 남거나 사라졌고 .git 파일은 지워졌고 파일이 남은 폴더에 accept 가 커밋하려다, resume 이 worktree add 를 하려다 죽었다.
+//   남은 파일이 사라질 때까지 기다린다(지우지 않는다 — 깨끗할 때만 지우기 시작한 폴더라 내용은 브랜치에 있다).
+function clearWorktreeSlot(root, wt, branch, waitMs) {
+  if (!fs.existsSync(wt)) return null;
+  if (worktreeRegistered(root, wt) && isWorktreeRoot(wt, branch)) return null;
+  if (fs.existsSync(path.join(wt, '.git'))) return `${wt} exists but is not a working tree of ${branch} — inspect it`;
+  const until = Date.now() + (waitMs == null ? 120000 : waitMs);
+  for (;;) {
+    git(root, ['worktree', 'prune'], { allowFail: true });
+    if (removeEmptyDir(wt)) return null;
+    if (Date.now() >= until) return `the previous worktree ${wt} is still being removed (another process still holds files in it) — wait a minute and try again`;
+    S.sleepSync(1000);
+  }
+}
+
 function diffNames(cwd, from, to, extra) {
   const r = git(cwd, ['diff', '--name-only', '-z', '--no-renames', ...(extra || []), from, ...(to ? [to] : [])], { allowFail: true });
   return r.ok ? r.out.split('\0').filter(Boolean) : [];
@@ -386,7 +403,7 @@ function copyWorktreeInclude(root, wt) {
 }
 
 module.exports = {
-  git, identityArgs, headSha, isWorktreeRoot, removeEmptyDir, currentBranch, branchExists, tagExists, isAncestor, ensureRepo, isRepo, statusEntries, dirtyFiles, isClean, ignoredChanges,
+  git, identityArgs, headSha, isWorktreeRoot, removeEmptyDir, clearWorktreeSlot, currentBranch, branchExists, tagExists, isAncestor, ensureRepo, isRepo, statusEntries, dirtyFiles, isClean, ignoredChanges,
   commitAll, unaddablePaths, isSecretPath, ensureExclude, addWorktree, worktreeList, worktreeRegistered, checkoutOf, mainWorktree, removeWorktree, samePath,
   diffNames, mergeBase, unmergedFiles, mergeInProgress, hasConflictMarkers, hasConflictMarkersText, MARKER_RE, worktreeIncludeFiles, copyWorktreeInclude, sha1, LOCK_ERR,
   gitlinks, fillSubmodules, dropSubmoduleClones, worktreeLinks,

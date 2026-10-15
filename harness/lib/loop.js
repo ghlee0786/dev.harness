@@ -93,6 +93,7 @@ async function go(o) {
     // 린트(프로젝트 블록 lint_command) — 테스트 다음의 두 번째 결정적 검사. {files} 가 있으면 작업이 바꾼 파일만.
     const lintCmd = K.yamlString(here, 'lint_command') || K.yamlString(P.wt, 'lint_command');
     if (/^(off|false|no)$/i.test(K.yamlString(here, 'rerun_failed') || K.yamlString(P.wt, 'rerun_failed') || '')) task.checks.rerun = false;
+    if (/^(on|true|yes)$/i.test(K.yamlString(here, 'serial_checks') || K.yamlString(P.wt, 'serial_checks') || '')) task.checks.serial = true;
     if (lintCmd) task.checks.lint = { command: lintCmd, files: /{files}/.test(lintCmd), baseline_ok: null, last: null };
     S.writeTask(root, task);
     log(`[harness] ${id} — worktree ${P.wt} · checks: ${found.source}${found.commands.length ? ' — ' + found.commands.map(K.display).join(' ; ') : ''}`);
@@ -104,7 +105,7 @@ async function go(o) {
       if (!o.freshBaseline) { try { b = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch { b = null; } }
       if (b) { log(`[harness] ${id} — baseline reused from an earlier task on the same base commit (--fresh-baseline to rerun)`); task.checks.baseline_cached = true; }
       else {
-        b = (await K.runJudged(P.wt, found.commands, { timeoutMs: o.checkTimeoutMs, rerun: task.checks.rerun })).judged;
+        b = (await K.runJudged(P.wt, found.commands, { timeoutMs: o.checkTimeoutMs, rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
         const slim = { ...b, results: (b.results || []).map(r => ({ ...r, output: undefined })) };
         try { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(slim)); } catch { /* 캐시 실패는 작업을 멈추지 않는다 */ }
       }
@@ -163,7 +164,9 @@ async function resume(o) {
   if (added.length && task.runtime === 'codex') log(`[harness] ${task.id} — note: allow rules have no effect on the Codex runtime; its sandbox governs what runs`);
   const c = { root, P, task, run, lock, log, t0, spentBefore: task.spent.wall_ms || 0, o, added };
   try {
-    if (!fs.existsSync(P.wt) || !G.worktreeRegistered(root, P.wt)) {
+    if (!fs.existsSync(P.wt) || !G.worktreeRegistered(root, P.wt) || !G.isWorktreeRoot(P.wt, task.branch)) {
+      const why = G.clearWorktreeSlot(root, P.wt, task.branch, o.removalWaitMs);
+      if (why) return finish(c, 'interrupted', why);
       G.git(root, ['worktree', 'prune'], { allowFail: true });
       G.addWorktree(root, P.wt, { branch: task.branch, base: task.base_commit });   // 브랜치가 없으면(생성 전 오류) 기록된 기준에서
       task.worktree_include = G.copyWorktreeInclude(root, P.wt);
@@ -357,7 +360,7 @@ async function loop(c, kind) {
 
     let verdict = null;
     if (task.checks.commands.length) {
-      const rj = await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: Math.min(c.o.checkTimeoutMs || task.checks.timeout_ms || K.CHECK_TIMEOUT_MS, Math.max(1000, deadline - Date.now() + 60000)), rerun: task.checks.rerun });
+      const rj = await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: Math.min(c.o.checkTimeoutMs || task.checks.timeout_ms || K.CHECK_TIMEOUT_MS, Math.max(1000, deadline - Date.now() + 60000)), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null });
       const judged = rj.judged;
       if (rj.flaky.length) { task.checks.flaky = [...new Set([...(task.checks.flaky || []), ...rj.flaky])]; S.log(root, task.id, { event: 'flaky', commands: rj.flaky }); log(`[harness] ${task.id} — flaky: ${rj.flaky.join(' ; ')} failed, then passed on rerun`); }
       task.checks.last = K.brief(judged);

@@ -22,7 +22,8 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 
 | 명령 | 하는 일 |
 |---|---|
-| `go "<요청>"` | 자기 worktree 에서 끝까지 실행하고 보고서를 낸다 — `--goal-file` · `--check "<명령>"` · `--attach <파일>` · `--doc <문서>` · `--allow "<규칙>"` · `--runtime claude\|codex` |
+| `go "<요청>"` | 자기 worktree 에서 끝까지 실행하고 보고서를 낸다 — `--goal-file` · `--check "<명령>"` · `--attach <파일>` · `--doc <문서>` · `--allow "<규칙>"` · `--runtime claude\|codex` · `--detach`(셸과 분리해 띄우고 id 를 바로 돌려준다) |
+| `wait <id>` | 작업이 끝날 때까지 기다려 보고를 낸다 — 에이전트 셸의 시간 상한에 걸려도 작업은 계속된다(`--detach` 와 함께) |
 | `status` · `stop <id>` · `resume <id>` | 현황(누적 비용 · 겹침 · 주인 없는 변경) · 멈춤(진행분 커밋) · 이어 가기 |
 | `accept <id>` · `cancel <id>` · `restore <id>` | 받아들이기(`--no-ff` 병합 · 사용자가 말한 뒤에만 · 테스트와 린트를 다시 본다) · 취소(revert) · 되살리기 |
 | `push [<remote>] [<branch>]` · `push [<remote>] --tag <이름>` | 빨리감기 push · 릴리스 태그 push(덮어쓰지 않는다) — 사용자가 명시한 뒤에만 |
@@ -54,6 +55,7 @@ test_command: "npm test"                 # 완료 판정 — 없으면 package.j
 lint_command: "npx eslint {files}"       # 두 번째 판정 — {files} 는 작업이 바꾼 파일
 check_timeout_min: 20                    # 검사 상한(기본 15분)
 rerun_failed: on                         # 실패한 검사 재실행(off 로 끈다)
+serial_checks: true                      # 검사를 프로젝트 단위로 하나씩(공유 시험 DB · 포트 — 기본은 동시)
 reply_language: "Korean"                 # 작업자의 기록 · 보고 언어(목표에 한글이 있으면 기본 Korean)
 worker_allow: ["Bash(docker build:*)"]   # 무인 작업자에게 더 허용할 명령(git 쓰기 · 셸은 거부)
 worktree_links: ["../SiblingRepo"]       # 저장소 밖 형제 폴더를 참조하는 빌드

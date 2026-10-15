@@ -42,7 +42,7 @@ const REFUSE_KO = [
   [/^target branch (\S+) is not checked out in any checkout(.*)$/s, m => `대상 브랜치 ${m[1]} 가 어느 체크아웃에도 열려 있지 않다 — 메인 체크아웃에서 열고 다시 하세요`],
   [/^checks fail after bringing (\S+) into (\S+) \((\d+) failing\)(.*)$/s, m => `${m[1]} 를 ${m[2]} 에 들인 뒤 검사가 실패한다(${m[3]}건) — 결과 브랜치에 ${m[1]} 가 들어 있다. resume 하거나 고친 뒤 다시 accept`],
   [/^lint fails on (\S+) \((.*?)\): (.*) — resume or fix it, then accept again$/s, m => `${m[1]} 에서 린트가 실패한다(${m[2]}): ${m[3]} — resume 하거나 고친 뒤 다시 accept`],
-  [/^the previous worktree (\S+) is still being removed(.*)$/s, m => `이전 worktree ${m[1]} 가 아직 지워지는 중이다(다른 프로세스가 파일을 잡고 있다) — 1분쯤 뒤 다시 accept`],
+  [/^the previous worktree (\S+) is still being removed(.*)$/s, m => `이전 worktree ${m[1]} 가 아직 지워지는 중이다(다른 프로세스가 파일을 잡고 있다) — 1분쯤 뒤 다시 하세요`],
 ];
 const refuseKo = r => { for (const [re, fn] of REFUSE_KO) { const m = re.exec(String(r)); if (m) return fn(m); } return String(r); };
 const refused = (task, reason) => out(task, { refused: true, reason, report: isKo(task) ? `harness ${task.id} — 바뀐 것 없음: ${refuseKo(reason)}` : `harness ${task.id} — nothing changed: ${reason}` });
@@ -74,22 +74,11 @@ function locked(root, staleTask, pre, fn) {
   }), { waitMs: MERGE_WAIT_MS });
 }
 
-// 작업의 worktree 를 쓸 수 있게 한다 → 못 하면 거부 이유(문자열).
-//   [2026-10-14 자동 이슈 #1 · #2] resume 직후 accept — Windows 에서 worktree 삭제가 아직 진행 중이었다(등록은 남고 .git 파일은 지워졌고
-//   다른 프로세스가 잡은 파일이 남음). 그 폴더를 worktree 로 보고 커밋하려다 NOT_WORKTREE_ROOT 로 죽었다. 남은 파일이 사라질 때까지
-//   기다렸다가(지우지 않는다 — 깨끗할 때만 지우기 시작한 폴더라 내용은 브랜치에 있다) 새로 만들고, 끝내 남으면 거부한다.
+// 작업의 worktree 를 쓸 수 있게 한다 → 못 하면 거부 이유(문자열). 지워지는 중인 예전 폴더는 G.clearWorktreeSlot 이 기다린다(자동 이슈 #1 · #2).
 function ensureWorktree(root, task, P, waitMs) {
-  if (fs.existsSync(P.wt) && G.worktreeRegistered(root, P.wt)) {
-    if (G.isWorktreeRoot(P.wt, task.branch)) return null;
-    if (fs.existsSync(path.join(P.wt, '.git'))) return `${P.wt} is registered as this task's worktree but is not a working tree of ${task.branch} — inspect it`;
-    const until = Date.now() + (waitMs == null ? 120000 : waitMs);
-    for (;;) {
-      G.git(root, ['worktree', 'prune'], { allowFail: true });
-      if (G.removeEmptyDir(P.wt)) break;
-      if (Date.now() >= until) return `the previous worktree ${P.wt} is still being removed (another process still holds files in it) — wait a minute and run accept again`;
-      S.sleepSync(1000);
-    }
-  }
+  if (fs.existsSync(P.wt) && G.worktreeRegistered(root, P.wt) && G.isWorktreeRoot(P.wt, task.branch)) return null;
+  const why = G.clearWorktreeSlot(root, P.wt, task.branch, waitMs);
+  if (why) return why;
   G.git(root, ['worktree', 'prune'], { allowFail: true });
   G.addWorktree(root, P.wt, { branch: task.branch });
   task.worktree_include = G.copyWorktreeInclude(root, P.wt);
@@ -208,6 +197,10 @@ async function accept(o) {
     const clash0 = dirtyOverlap(co.path, touched0);
     if (clash0.length) return refused(task, `uncommitted changes in ${co.path} touch files this task changed: ${clash0.join(', ')} — commit them first`);
 
+    // 작업이 끝난 뒤 결과 브랜치가 그대로인가 — 그렇고 대상 브랜치도 들이지 않으면 루프의 린트 통과를 그대로 쓴다(아래).
+    const unchangedSinceLoop = !!task.head && G.headSha(root, task.branch) === task.head;
+    let broughtTarget = false;
+
     // 1. .harness/<id>/ 보관 → 삭제 커밋
     const wtWhy = ensureWorktree(root, task, P, o.removalWaitMs);
     if (wtWhy) return refused(task, wtWhy);
@@ -217,6 +210,7 @@ async function accept(o) {
     // 2. 대상 브랜치를 가져와 최신화(충돌 → 같은 세션이 푼다 · 예산 안에서만) → 검사
     let rounds = 0;
     for (let pass = 0; pass < 2 && !G.isAncestor(root, target, task.branch); pass++) {
+      broughtTarget = true;
       const m = G.git(P.wt, [...G.identityArgs(P.wt), 'merge', '--no-ff', '--no-edit', '--no-verify', '-m', `harness(${task.id}): bring ${target} up to date`, target], { allowFail: true, retryLock: true });
       if (!m.ok) {
         if (!G.mergeInProgress(P.wt)) { S.writeTask(root, task); return refused(task, `could not bring ${target} into ${task.branch}: ${m.err.trim().slice(0, 300)}`); }
@@ -227,7 +221,7 @@ async function accept(o) {
       } else task.commits.push(G.headSha(P.wt));
       S.log(root, task.id, { event: 'target_merged', target, rounds });
       if (task.checks.commands.length) {
-        const j = (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun })).judged;
+        const j = (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
         task.checks.last = K.brief(j);
         const v = K.judge(j, task.checks.baseline, { notWorse: task.checks.source !== 'user' });
         S.log(root, task.id, { event: 'checks', phase: 'accept', verdict: v.verdict, pass: j.pass, fail: j.fail });
@@ -239,7 +233,10 @@ async function accept(o) {
       }
     }
     // 린트 — 대상 브랜치를 들인 뒤에도 작업이 바꾼 파일에서 다시 본다(루프에서 통과했어도 그 뒤의 커밋 · 대상 브랜치가 깨뜨릴 수 있다).
-    if (task.checks.lint) {
+    //   [2026-10-14 자동 이슈 #3] 새로 만든 worktree 는 빌드 · 복원 산출물이 없어(--no-restore 린트) 루프에서 통과한 린트가 거절됐다.
+    const lintPassedInLoop = task.checks.lint && task.checks.lint.last && task.checks.lint.last.ok;
+    if (task.checks.lint && unchangedSinceLoop && !broughtTarget && lintPassedInLoop) S.log(root, task.id, { event: "lint", phase: "accept", ok: true, reused: "passed in the loop; nothing changed since" });
+    else if (task.checks.lint) {
       const lt = task.checks.lint;
       const changed = G.diffNames(root, target, task.branch).filter(f => !f.startsWith('.harness/') && fs.existsSync(path.join(P.wt, f)));
       const argv = K.lintArgv(lt.command, lt.files ? changed : []);
@@ -363,7 +360,7 @@ async function revertOnto(root, task, target, commit, extra, label, o) {
     } else if (task.checks.commands.length) {
       // cancel: 되돌린 뒤의 상태는 작업 전 기준선보다 나쁘지 않으면 된다(사용자 검사는 되돌린 기능을 묘사하므로 다시 빨개지는 게 맞다).
       // restore: 기능이 돌아오므로 accept 때와 같은 판정.
-      const j = await K.runAll(tmp, K.commandsForJudge(tmp, task.checks), { timeoutMs: checkTimeout(task, o) });
+      const j = await K.runAll(tmp, K.commandsForJudge(tmp, task.checks), { timeoutMs: checkTimeout(task, o), serialRoot: task.checks.serial ? root : null });
       const v = K.judge(j, task.checks.baseline, { notWorse: label === 'cancel' || task.checks.source !== 'user' });
       S.log(root, task.id, { event: 'checks', phase: label, verdict: v.verdict, pass: j.pass, fail: j.fail });
       if (v.verdict === 'fail') return { refused: `checks fail on ${target} after the ${label} revert (${j.fail} failing); nothing was applied — if this is only an environment problem, run ${label} again with --skip-checks` };

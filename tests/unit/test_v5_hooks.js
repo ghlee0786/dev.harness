@@ -13,7 +13,9 @@ const home = path.join(base, 'home');
 fs.mkdirSync(home, { recursive: true });
 const gitGlobal = path.join(base, 'gitconfig-global');
 fs.writeFileSync(gitGlobal, '');
-const ENV = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), GIT_CONFIG_GLOBAL: gitGlobal, GIT_CONFIG_NOSYSTEM: '1' };
+// 저장소 밖에서 훅이 남기는 오류 로그(os.tmpdir()/harness)도 임시 폴더로 — 사용자의 TEMP 에 쓰지 않는다.
+const hookTmp = path.join(base, 'tmp'); fs.mkdirSync(hookTmp, { recursive: true });
+const ENV = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), GIT_CONFIG_GLOBAL: gitGlobal, GIT_CONFIG_NOSYSTEM: '1', TEMP: hookTmp, TMP: hookTmp, TMPDIR: hookTmp };
 for (const k of ['CLAUDE_PROJECT_DIR', 'HARNESS_HOOK_RUNTIME', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete ENV[k];
 
 function hook(name, payload, args, cwd) {
@@ -396,7 +398,7 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
     R.check('[lang] 한국어 답(코드 · 명령 · 경로가 섞여도)은 통과', isAllow(lang('Stop', { last_assistant_message: KO, stop_hook_active: false })));
     const enUp = lang('UserPromptSubmit', { prompt: 'please add the lint rules' }, 'L2');
     R.check('[lang] 영어로 묻는 세션에는 아무것도 하지 않는다(덧붙임 · 되돌림 없음)', isAllow(enUp) && isAllow(lang('Stop', { last_assistant_message: EN, stop_hook_active: false }, 'L2')));
-    R.check('[lang] 저장소 밖 · 깨진 입력은 조용히 통과', isAllow(hook('lang', { hook_event_name: 'Stop', session_id: 'x', cwd: base, last_assistant_message: EN })) && isAllow(hook('lang', 'not json')));
+    R.check('[lang] 저장소 밖 · 깨진 입력은 조용히 통과', isAllow(hook('lang', { hook_event_name: 'Stop', session_id: 'x', cwd: base, last_assistant_message: EN })) && isAllow(hook('lang', 'not json')) && fs.existsSync(path.join(hookTmp, 'harness', 'hook-errors.log')));
 
     R.check('[격리] 가짜 HOME 에 .claude · .codex 가 생기지 않았다', !fs.existsSync(path.join(home, '.claude')) && !fs.existsSync(path.join(home, '.codex')));
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }

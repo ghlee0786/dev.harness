@@ -307,7 +307,17 @@ function runCheck(cwd, argv, o) {
   });
 }
 
+// o.serialRoot 가 있으면 그 프로젝트의 검사를 하나씩 돌린다(잠금 "checks" · 프로젝트 블록 serial_checks: true).
+//   [2026-10-15 자동 이슈 #4] 같은 시험 DB 를 쓰는 작업 둘이 동시에 검사하다 서로 멈췄다. 기다리는 동안 이벤트 루프를 막지 않는다(stop 을 받는다).
 async function runAll(cwd, commands, o) {
+  if (o && o.serialRoot) {
+    const S = require("./state"); let h;
+    for (;;) {
+      try { h = S.acquire(o.serialRoot, "checks"); break; }
+      catch (e) { if (e.code !== "LOCK_HELD") throw e; await new Promise(r => setTimeout(r, 1000)); }
+    }
+    try { return await runAll(cwd, commands, { ...o, serialRoot: null }); } finally { h.release(); }
+  }
   const results = [];
   // 항목은 argv 배열, 또는 { argv, shell, bin, label }(commandsForJudge 가 만든 대체 명령).
   for (const c of commands || []) {

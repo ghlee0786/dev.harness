@@ -82,6 +82,22 @@ async function waitFile(f, ms) { const t0 = Date.now(); while (Date.now() - t0 <
     R.check('[RN-03] 프롬프트는 stdin 으로(argv 에 없음)', L && L.stdin === f.o.prompt && !a.includes(f.o.prompt), L && JSON.stringify(L.stdin));
     R.check('[RN-03] --settings 파일 = policy.claudeSettings(allowCommands)', L && JSON.stringify(L.settings) === JSON.stringify(policy.claudeSettings(['node', 'npm'])), L && JSON.stringify(L.settings));
     R.check('[RN-03] --settings 임시 파일은 호출 뒤 지워진다', L && !!L.settingsPath && !fs.existsSync(L.settingsPath), L && L.settingsPath);
+    {
+      // 강제 종료된 작업자가 남긴 --settings 파일 — 주인이 죽었으면 다음 실행이 치운다 · 살아 있는 주인의 것은 그대로
+      const sd = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-v5-sweep-'));
+      const dead = '99999996';   // 어느 OS 에서도 배정되지 않는 pid(끝난 프로세스의 pid 는 곧 재사용될 수 있다)
+      const fDead = path.join(sd, `harness-claude-settings-${dead}-abc123.json`), fLive = path.join(sd, `harness-claude-settings-${process.pid}-def456.json`), fOther = path.join(sd, 'other.json');
+      for (const f of [fDead, fLive, fOther]) fs.writeFileSync(f, '{}');
+      const gone = rc.sweepOrphanSettings(sd);
+      R.check('[RN-03b] 주인이 죽은 --settings 임시 파일만 치운다(살아 있는 주인 · 다른 파일은 그대로)', !fs.existsSync(fDead) && fs.existsSync(fLive) && fs.existsSync(fOther) && gone.length === 1, JSON.stringify(gone));
+      // 테스트 러너: 끊긴 이전 실행의 임시 폴더는 6시간 넘은 것만 치운다(동시에 도는 실행의 폴더는 그대로)
+      const old = path.join(sd, 'harness-v5-loop-AbC123'), fresh = path.join(sd, 'harness-v5-integ-XyZ789'), mine = path.join(sd, 'harness-v5-lint-notmine-x');
+      for (const d of [old, fresh, mine]) fs.mkdirSync(d);
+      const t7 = Date.now() - 7 * 3600 * 1000; fs.utimesSync(old, t7 / 1000, t7 / 1000); fs.utimesSync(mine, t7 / 1000, t7 / 1000);
+      const swept = require('../run.js').sweepStaleTmp(sd);
+      R.check('[RN-03c] 테스트 러너는 6시간 넘은 테스트 임시 폴더만 치운다', !fs.existsSync(old) && fs.existsSync(fresh) && fs.existsSync(mine) && swept.join() === 'harness-v5-loop-AbC123', JSON.stringify(swept));
+      fs.rmSync(sd, { recursive: true, force: true });
+    }
     R.check('[RN-03] 자식 환경에 CLAUDECODE · CLAUDE_CODE_ENTRYPOINT 가 없다', L && L.env.CLAUDECODE === null && L.env.CLAUDE_CODE_ENTRYPOINT === null, L && JSON.stringify(L.env));
     R.check('[RN-03] cwd 에서 실행', L && fs.realpathSync.native(L.cwd).toLowerCase() === fs.realpathSync.native(cwd).toLowerCase(), L && L.cwd);
     R.check('[RN-03] 결과: ok · session_id · final_text · 비용 · 토큰(캐시 포함 입력)',

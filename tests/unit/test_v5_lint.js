@@ -76,6 +76,22 @@ const steps = list => { const calls = []; const run = async o => { const n = cal
     // LT-08 — {files} 치환: 바뀐 파일이 없으면 린트를 돌리지 않는다 · 경로에 공백이 있어도 한 인자
     R.check('[LT-08] {files} 치환 — 공백 경로는 따옴표 · 빈 목록이면 null', K.lintArgv('node lint.js {files}', ['a b.js', 'c.js']).join('|') === 'node lint.js "a b.js" c.js' && K.lintArgv('node lint.js {files}', []) === null,
       JSON.stringify([K.lintArgv('node lint.js {files}', ['a b.js', 'c.js']), K.lintArgv('node lint.js {files}', [])]));
+
+    // ── [2026-10-15 자동 이슈 #4] 같은 시험 DB 를 쓰는 작업 둘이 동시에 검사하면 서로 멈췄다 — serial_checks: true 면 프로젝트 단위로 하나씩 ──
+    const rs = repo(null);
+    const SLOW = `const fs=require('fs');fs.appendFileSync(process.argv[1]+'.log','start '+Date.now()+'\\n');setTimeout(()=>{fs.appendFileSync(process.argv[1]+'.log','end '+Date.now()+'\\n');console.log('# pass 1\\n# fail 0')},700)`;
+    const spans = async (serialRoot, tag) => {
+      const f = path.join(base, `slow-${tag}.js`); write(f, SLOW);
+      await Promise.all([1, 2].map(() => K.runAll(rs, [['node', f]], { serialRoot })));
+      const ev = fs.readFileSync(`${f}.log`, 'utf8').trim().split('\n').map(l => l.split(' ')).map(([k, t]) => ({ k, t: Number(t) })).sort((a, b) => a.t - b.t);
+      return ev.map(e => e.k).join(',');
+    };
+    const serial = await spans(rs, 'on'), parallel = await spans(null, 'off');
+    R.check('[SC-01] serialRoot 가 있으면 같은 프로젝트의 검사가 겹치지 않는다(start,end,start,end) · 없으면 겹친다', serial === 'start,end,start,end' && parallel === 'start,start,end,end', `${serial} | ${parallel}`);
+    const rs2 = repo(null, { 'CLAUDE.md': '```yaml\nserial_checks: true\n```\n' });
+    const ts2 = await L.go({ ...quiet, root: rs2, goal: 'x', run: async o => { write(path.join(o.cwd, 'f.txt'), 'x\n'); return { ok: true, session_id: 's', final_text: 'ok', cost_usd: 0, is_error: false, permission_denials: [] }; } });
+    const ts1 = await L.go({ ...quiet, root: rs, goal: 'x', run: async o => { write(path.join(o.cwd, 'f.txt'), 'x\n'); return { ok: true, session_id: 's', final_text: 'ok', cost_usd: 0, is_error: false, permission_denials: [] }; } });
+    R.check('[SC-02] 프로젝트 블록 serial_checks: true → 작업에 기록(resume · accept 도 같은 값) · 없으면 꺼짐', S.readTask(rs2, ts2.id).checks.serial === true && !S.readTask(rs, ts1.id).checks.serial, `${ts2.status} ${JSON.stringify(S.readTask(rs2, ts2.id).checks.serial)} ${JSON.stringify(S.readTask(rs, ts1.id).checks.serial)}`);
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }
   R.done();

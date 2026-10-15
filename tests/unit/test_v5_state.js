@@ -22,7 +22,8 @@ function mkRepo(name, files) {
   git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'init']);
   return dir;
 }
-const deadPid = () => { const r = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }); return Number(r.stdout); };
+// 끝난 프로세스의 pid 는 부하가 크면 곧 재사용된다(Windows) — 어느 OS 에서도 배정되지 않는 큰 값(4의 배수).
+const deadPid = () => 99999996;
 const sleeper = () => spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 60000)'], { stdio: 'ignore', windowsHide: true });
 const wait = ms => new Promise(r => setTimeout(r, ms));
 function runChildren(n, script, env) {

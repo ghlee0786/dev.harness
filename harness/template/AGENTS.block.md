@@ -16,7 +16,7 @@
 - 다른 세션 · 사람의 미커밋 변경은 건드리지 않는다(stash · 되돌리기 · 커밋 모두) · 비밀 파일(`.env*` · `*.pem` · `*.key` · `id_rsa*` · `.npmrc` · `credentials*` · `*.tfstate` · `service-account*.json`)은 커밋하지 않는다.
 
 ### 큰 작업 · 여러 세션
-- 여러 파일에 걸친 기능 추가 · 수정 요청은 `node harness/cli.js go "<요청 원문>"` 으로 보낸다. 자기 worktree · 브랜치(`harness/<id>`)에서 끝까지 돌고 보고서를 낸다.
+- 여러 파일에 걸친 기능 추가 · 수정 요청은 `node harness/cli.js go "<요청 원문>"` 으로 보낸다(`--detach` 로 띄우고 `wait <id>` 로 보고를 받는다 — 셸 안에서 돌리면 셸의 시간 상한에 함께 죽는다). 자기 worktree · 브랜치(`harness/<id>`)에서 끝까지 돌고 보고서를 낸다.
 - 사용자가 이미지 · 영상 · 음성 · 문서를 함께 줬으면(붙여 넣은 이미지는 `[Image: source: <경로>]` 로 보인다) 각 파일을 `--attach <경로>` 로 넘긴다 — 영상은 장면 이미지와 전사로, 음성은 전사로 바뀌어 작업자에게 간다.
 - 실행 중인 작업을 멈출 때는 `node harness/cli.js stop <id>`(셸을 죽이지 않는다) — 진행분을 커밋하고 interrupted 로 바꾼다. 그 뒤 `resume` 또는 `cancel`.
 - 현황 `node harness/cli.js status` · 받아들이기 `accept <id>`(사용자가 말한 뒤) · 취소 `cancel <id>` · 되살리기 `restore <id>` · 정리 `gc`(끝난 작업) · `cleanup-legacy`(이전 하네스 잔여물 — `--apply` 는 사용자가 말한 뒤).

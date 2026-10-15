@@ -8,10 +8,10 @@ description: 무언가를 만들거나 고쳐 달라는 요청을 하네스 CLI(
 ## 만들거나 고쳐 달라는 요청
 1. 사용자 요청 **원문 그대로**를 임시 파일에 쓴다 — 셸 명령줄에 넣지 않는다(따옴표·`$(…)`·백틱이 셸에서 바뀌거나 실행된다).
    Claude Code 는 Write 도구로(예: 스크래치패드의 `harness-goal.txt`), Codex 는 파일 쓰기로. 고치거나 요약하지 않는다.
-2. `node harness/cli.js go --goal-file "<그 파일 경로>"` 를 **백그라운드로** 실행한다(Claude Code: Bash `run_in_background: true`). 몇 분~몇십 분 걸린다.
+2. `node harness/cli.js go --detach --goal-file "<그 파일 경로>"` 를 실행한다 — 작업을 셸과 분리된 프로세스로 띄우고 id 를 바로 돌려준다(몇 초). `--detach` 를 빼지 않는다: 에이전트 셸에는 시간 상한(Claude Code 백그라운드 30분)이 있어 셸 안에서 돌린 작업은 함께 죽는다.
    사용자가 검사 명령을 줬으면 `--check "<명령>"` 으로 넘긴다. (파일을 쓸 수 없으면 `go -` 로 원문을 stdin 에 넘긴다.)
    사용자가 **이미지 · 영상 · 음성 · 문서**를 함께 줬으면 파일마다 `--attach "<경로>"` 를 붙인다. 대화창에 붙여 넣은 이미지는 메시지에 `[Image: source: <경로>]` 로 보이니 그 경로를 쓴다. 경로가 없는 이미지는 사용자에게 파일로 저장해 경로를 달라고 한 번 묻는다.
-3. 끝났다는 알림을 기다린다. 도는 동안 묻지 않는다.
+3. `node harness/cli.js wait <id>` 를 **백그라운드로** 실행하고(Claude Code: Bash `run_in_background: true`) 끝났다는 알림을 기다린다. 몇 분~몇십 분 걸린다. `wait` 가 셸 상한으로 끝나도 작업은 계속 돈다 — 그때는 `wait <id>` 를 다시 띄운다(종료 코드 3 = 아직 실행 중). 도는 동안 묻지 않는다.
 4. 보고를 사용자의 언어로 전하고 멈춘다 — 맨 위의 `요약:` · `첨부:` · `다음:` · `주의:` 줄은 그대로, 그 아래의 영어 세부 줄은 빠짐없이 사용자의 언어로 옮긴다(명령 · 경로 · 숫자 · 브랜치 이름은 원문 그대로). 줄이거나 판단을 덧붙이지 않는다.
 
 ## 받아들이기 · 취소 · 되살리기
@@ -19,7 +19,7 @@ description: 무언가를 만들거나 고쳐 달라는 요청을 하네스 CLI(
 - 사용자가 취소를 원하면: `node harness/cli.js cancel <id>` · 취소한 병합을 되살리려면: `node harness/cli.js restore <id>`
 - 실행 중인 작업을 멈추려면: `node harness/cli.js stop <id>`(go 를 띄운 셸을 죽이지 않는다).
 - 사용자가 push 를 **명시적으로** 요청하면: `node harness/cli.js push [<remote>] [<branch>]` — 빨리감기만, 강제 없음, 결과 브랜치는 먼저 accept.
-- 중단된 작업 이어 가기: `node harness/cli.js resume <id>` — 상한을 늘릴 때는 **새 총액**을 준다(`--budget-usd 40` = 작업 전체 $40, 추가분 아님).
+- 중단된 작업 이어 가기: `node harness/cli.js resume <id> --detach` 뒤 `wait <id>`(위와 같이) — 상한을 늘릴 때는 **새 총액**을 준다(`--budget-usd 40` = 작업 전체 $40, 추가분 아님).
 - BLOCKED 로 끝났고 보고에 `denied commands` 가 있으면 사용자에게 보여 주고, 사용자가 허용하면 보고의 `resume <id> --allow "Bash(…:*)"` 줄을 그대로 실행한다(허용은 사용자가 정한다 — 스스로 넓히지 않는다).
 
 ## 현황
