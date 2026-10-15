@@ -17,8 +17,9 @@ const USAGE = `usage:
   node harness/cli.js resume <id> [--allow "<rule>"]... [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--model M] [--effort E]
       caps are totals for the whole task (not additions): pass the new total, e.g. --budget-usd 40 after $20 was spent
       a blocked task resumes in the same session: its BLOCKED.md is kept as BLOCKED.<n>.md and the worker is told what you allowed
-      --detach (go · resume): run the task in a process detached from this shell and return its id at once — agent shells have time limits
-                              that would end the task with them; then: node harness/cli.js wait <id>
+      go · resume always run the task in a process detached from this shell and wait for it here — if this shell ends (agent shells have
+      time limits), the task keeps going: node harness/cli.js wait <id> prints its report
+      --detach (go · resume): return the id at once instead of waiting · --foreground: run in this process (the old way)
   node harness/cli.js wait <id> [--timeout-min N]   (waits until the task is no longer running, then prints its report · exit 3 if still running at the limit)
   node harness/cli.js status [--json]
   node harness/cli.js accept <id> [--into <branch>] [--force] [--budget-usd N]   (only after the user accepts the result; --force for tasks not 'done')
@@ -42,7 +43,7 @@ defaults: runtime claude · model opus · budget $20 · wall 120 min · max cont
 
 const VALUE = new Set(['--check', '--runtime', '--model', '--effort', '--budget-usd', '--token-budget', '--wall-min', '--max-continuations', '--root', '--into', '--base', '--target', '--check-timeout-min', '--goal-file',
   '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--tag', '--timeout-min']);
-const FLAGS = new Set(['--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs', '--detach']);
+const FLAGS = new Set(['--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs', '--detach', '--foreground']);
 
 function parse(argv) {
   const o = { _: [], checks: [], docs: [], allow: [], attach: [] };
@@ -172,8 +173,16 @@ async function main(argv, io) {
     } catch (e) { err(`harness ${cmd}: ${e.message}`); return 1; }
   }
 
-  if (o.detach && (cmd === 'go' || cmd === 'resume')) return detach(cmd, argv, rest, root, io, out, err);
   if (cmd === 'wait') return waitFor(rest[0], o, root, out, err);
+  // [2026-10-16 실측] 갱신 전에 시작한 세션은 옛 안내대로 go 를 셸 안에서 돌려 셸의 시간 상한에 작업이 함께 죽었다 — 안내에 기대지 않는다:
+  //   go · resume 은 늘 분리된 프로세스에서 돌고(detach), 부른 쪽은 끝날 때까지 기다려 보고를 낸다. 그 프로세스 자신은 이 표시로 안다(손자에게 물려주지 않는다).
+  //   이 프로세스에서 도는 경우: 이미 분리된 프로세스 · 테스트가 러너를 주입함(io.run) · --foreground · 저장소가 아직 없음(go --init).
+  const detachedChild = process.env.HARNESS_DETACHED_CHILD === '1';
+  delete process.env.HARNESS_DETACHED_CHILD;
+  const canDetach = () => {
+    if (detachedChild || (io && io.run) || o.foreground) return false;
+    try { require('./lib/state').mainRoot(root); return true; } catch { return false; }
+  };
 
   // task id 는 진입점에서 형식을 강제한다(L5) — `resume ..\..\x` 같은 경로가 상태 디렉터리 밖을 가리키지 않게.
   const needId = () => {
@@ -187,23 +196,36 @@ async function main(argv, io) {
   try {
     if (cmd === 'go') {
       // 목표 원문(L6): --goal-file <path> · `go -`(stdin) · 인자. 셸을 거친 인자는 따옴표·$()·백틱이 망가뜨릴 수 있다 — 스킬은 파일을 쓴다.
-      const fromStdin = rest.length === 1 && rest[0] === '-';
-      const sources = [o['goal-file'] != null, fromStdin, !fromStdin && rest.length > 0].filter(Boolean).length;
-      if (sources > 1) { err(`go takes the goal from one place: --goal-file, "-" (stdin) or the arguments\n${USAGE}`); return 2; }
+      // \uBD84\uB9AC\uB41C \uD504\uB85C\uC138\uC2A4\uB294 \uBD80\uBAA8\uAC00 \uAC80\uC99D\uD574 \uD30C\uC77C\uB85C \uB118\uAE34 \uBAA9\uD45C\uB97C \uC4F4\uB2E4(stdin \uC774 \uC5C6\uB2E4).
+      const handedGoal = detachedChild ? process.env.HARNESS_GOAL_FILE : null;
+      delete process.env.HARNESS_GOAL_FILE;
       let goal;
-      try {
-        if (o['goal-file'] != null) goal = fs.readFileSync(path.resolve(o['goal-file']), 'utf8');
-        else if (fromStdin) goal = (io && typeof io.stdin === 'string') ? io.stdin : fs.readFileSync(0, 'utf8');
-        else goal = rest.join(' ');
-      } catch (e) { err(`cannot read the goal: ${e.message}`); return 2; }
+      if (handedGoal) {
+        try { goal = fs.readFileSync(handedGoal, 'utf8'); } catch (e) { err(`cannot read the goal: ${e.message}`); return 2; }
+      } else {
+        const fromStdin = rest.length === 1 && rest[0] === '-';
+        const sources = [o['goal-file'] != null, fromStdin, !fromStdin && rest.length > 0].filter(Boolean).length;
+        if (sources > 1) { err(`go takes the goal from one place: --goal-file, "-" (stdin) or the arguments\n${USAGE}`); return 2; }
+        try {
+          if (o['goal-file'] != null) goal = fs.readFileSync(path.resolve(o['goal-file']), 'utf8');
+          else if (fromStdin) goal = (io && typeof io.stdin === 'string') ? io.stdin : fs.readFileSync(0, 'utf8');
+          else goal = rest.join(' ');
+        } catch (e) { err(`cannot read the goal: ${e.message}`); return 2; }
+      }
       goal = String(goal).replace(/^\uFEFF/, '').trim();
       if (!goal) { err(`go needs a goal\n${USAGE}`); return 2; }
+      if (canDetach()) return detach(cmd, argv, require('./lib/state').newId(), goal, root, out, err, !o.detach);
+      if (o.detach && !detachedChild && !(io && io.run)) { err('--detach needs an existing git repository \u2014 run go --init once without --detach'); return 2; }
       // --doc 경로는 부른 곳(cwd) 기준 — 루프는 저장소 상대로 바꿔 기록한다.
       // --detach 가 띄운 프로세스는 부모가 정한 id 를 쓴다(부모가 그 id 로 시작을 확인한다). 손자 프로세스에 물려주지 않는다.
       const S = require('./lib/state'), presetId = S.validId(process.env.HARNESS_TASK_ID) ? process.env.HARNESS_TASK_ID : undefined;
       delete process.env.HARNESS_TASK_ID;
       r = await require('./lib/loop').go({ ...common, ...caps, id: presetId, goal, checks: o.checks, runtime: o.runtime, base: o.base, init: !!o.init, docs: o.docs.map(p => path.resolve(p)), allow: o.allow, attach: o.attach.map(p => path.resolve(p)) });
-    } else if (cmd === 'resume') r = await require('./lib/loop').resume({ ...common, ...caps, id: needId(), allow: o.allow });
+    } else if (cmd === 'resume') {
+      const id = needId();
+      if (canDetach()) return detach(cmd, argv, id, null, root, out, err, !o.detach);
+      r = await require('./lib/loop').resume({ ...common, ...caps, id, allow: o.allow });
+    }
     else if (cmd === 'accept') r = await require('./lib/integrate').accept({ ...common, id: needId(), into: o.into, budgetUsd: o.budgetUsd, force: !!o.force });
     else if (cmd === 'cancel') r = await require('./lib/integrate').cancel({ ...common, id: needId(), skipChecks: !!o['skip-checks'] });
     else if (cmd === 'restore') r = await require('./lib/integrate').restore({ ...common, id: needId(), skipChecks: !!o['skip-checks'] });
@@ -223,27 +245,23 @@ async function main(argv, io) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// go/resume --detach — 작업을 이 셸과 분리된 프로세스로 띄우고, 그 프로세스가 작업을 잡은 것을 확인한 뒤 id 를 돌려준다.
+// go · resume — 작업을 이 셸과 분리된 프로세스로 띄우고, 그 프로세스가 작업을 잡은 것을 확인한다.
+//   waitAfter(기본): 끝날 때까지 기다려 보고를 낸다 — 이 프로세스가 죽어도(셸의 시간 상한) 작업은 계속되고 wait <id> 로 다시 받는다.
+//   --detach: 잡은 것만 확인하고 id 를 바로 돌려준다.
 //   [2026-10-02 · 2026-10-15 실측] 세션이 go 를 백그라운드 셸로 띄우면 셸의 시간 상한(Claude Code 30분)에 작업이 함께 죽어
 //   running · 주인 없음으로 남았다(그 뒤 resume · 남은 worktree 문제로 번졌다). 출력은 <git-common-dir>/harness/detached/<id>.log.
-async function detach(cmd, argv, rest, root, io, out, err) {
+async function detach(cmd, argv, id, goal, root, out, err, waitAfter) {
   const S = require('./lib/state');
-  let main;
-  try { main = S.mainRoot(root); } catch (e) { err(`--detach needs an existing git repository (${e.message}) — run go --init once without --detach`); return 2; }
-  const id = cmd === 'go' ? S.newId() : rest[0];
-  if (!S.validId(id)) { err(`${cmd} needs a task id\n${USAGE}`); return 2; }
+  const main = S.mainRoot(root);
   const dir = path.join(S.paths(main).harnessDir, 'detached');
   fs.mkdirSync(dir, { recursive: true });
   const args = argv.filter(a => a !== '--detach');
-  const env = { ...process.env };
+  const env = { ...process.env, HARNESS_DETACHED_CHILD: '1' };
   if (cmd === 'go') {
+    // 목표는 부모가 검증한 그대로 파일로 넘긴다(분리된 프로세스에는 stdin 이 없다 · 인자의 목표는 무시된다).
     env.HARNESS_TASK_ID = id;
-    // 분리된 프로세스에는 stdin 이 없다 — "-"(stdin) 목표는 파일로 넘긴다.
-    if (rest.length === 1 && rest[0] === '-') {
-      const goalFile = path.join(dir, `${id}.goal.txt`);
-      fs.writeFileSync(goalFile, (io && typeof io.stdin === 'string') ? io.stdin : fs.readFileSync(0, 'utf8'));
-      args.splice(args.indexOf('-'), 1, '--goal-file', goalFile);
-    }
+    env.HARNESS_GOAL_FILE = path.join(dir, `${id}.goal.txt`);
+    fs.writeFileSync(env.HARNESS_GOAL_FILE, goal);
   }
   const logFile = path.join(dir, `${id}.log`);
   const fd = fs.openSync(logFile, 'a');
@@ -257,13 +275,17 @@ async function detach(cmd, argv, rest, root, io, out, err) {
   for (const until = Date.now() + 120000; Date.now() < until;) {
     const t = S.readTask(main, id);
     if (t && t.status === 'running' && t.owner && t.owner.pid === c.pid) {
+      if (waitAfter) {
+        err(`[harness] ${id} — 분리된 프로세스(pid ${c.pid})에서 실행 중 — 이 셸이 끝나도 작업은 계속된다(다시 받기: node harness/cli.js wait ${id} · 로그 ${logFile})`);
+        return waitFor(id, {}, root, out, err, logFile);
+      }
       out(`harness ${id} — 분리된 프로세스(pid ${c.pid})에서 실행 중 · 로그 ${logFile}\n  끝날 때까지 기다려 보고 받기: node harness/cli.js wait ${id} · 멈추기: node harness/cli.js stop ${id}`);
       out(resultLine({ id, status: 'running' }));
       return 0;
     }
     if (exited !== null) {
       let log = ''; try { log = fs.readFileSync(logFile, 'utf8'); } catch { /* 없음 */ }
-      out(log.trim() || `harness ${id} — the detached process exited (${exited}) before starting the task`);
+      (exited === 0 ? out : err)(log.trim() || `harness ${id} — the detached process exited (${exited}) before starting the task`);   // 사용법 오류 · 거부는 stderr 로(그 자리에서 돌 때처럼)
       return exited === 0 ? 0 : (exited || 1);
     }
     await sleep(200);
@@ -273,13 +295,25 @@ async function detach(cmd, argv, rest, root, io, out, err) {
 }
 
 // wait <id> — 작업이 끝날 때까지(running 이 아니게 될 때까지) 기다렸다가 보고를 낸다. 이 명령이 죽어도 작업은 계속된다.
-async function waitFor(id, o, root, out, err) {
+async function waitFor(id, o, root, out, err, logFile) {
   const S = require('./lib/state'), L = require('./lib/loop');
   if (!S.validId(id)) { err(`wait needs a task id\n${USAGE}`); return 2; }
   const main = S.mainRoot(root);
   const limitMin = o['timeout-min'] != null ? Number(o['timeout-min']) : Infinity;
   const until = Date.now() + (Number.isFinite(limitMin) && limitMin >= 0 ? limitMin * 60000 : Infinity);
+  // 분리된 프로세스의 진행 줄([harness] …)을 그대로 흘려 보낸다 — 셸 안에서 돌던 때처럼 진행이 보이게. 끝난 줄까지만 읽는다.
+  let pos = 0;
+  const pump = () => {
+    if (!logFile) return;
+    try {
+      const b = fs.readFileSync(logFile), nl = b.lastIndexOf(0x0a);
+      if (nl < pos) return;
+      for (const l of b.slice(pos, nl + 1).toString('utf8').split(/\r?\n/)) if (l.startsWith('[harness]')) err(l);
+      pos = nl + 1;
+    } catch { /* 로그가 아직 없다 */ }
+  };
   for (;;) {
+    pump();
     const t = S.readTask(main, id);
     if (!t) { err(`unknown task: ${id}`); return 1; }
     if (!(t.status === 'running' && t.owner && S.ownerAlive(t.owner))) {

@@ -167,7 +167,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     R.check('[LP-09] 러너에 남은 예산을 넘긴다(20 → 5) · 재개 호출도 남은 예산만(누계 15 를 더하지 않는다)', f6.calls[0].budgetUsd === 20 && f6.calls[1].budgetUsd === 5 && f6.calls[1].sessionId === f6.calls[0].newSessionId);
     const r7 = checkRepo();
     const f7 = fake([async (o, n) => { impl('bad-' + n)(o); await wait(o.timeoutMs + 200); }]);
-    const cap2 = await go(r7, { run: f7, wallMin: 0.03 });
+    const cap2 = await go(r7, { run: f7, wallMin: 0.1 });   // 0.03(1.8초)은 부하가 크면 기준선 검사만으로 지나 작업자를 한 번도 못 불렀다
     R.check('[LP-09] 벽시계 상한 → capped', cap2.status === 'capped' && f7.calls.length === 1 && /wall clock/.test(cap2.reason), `${cap2.status} ${f7.calls.length} ${cap2.reason}`);
     const r8 = checkRepo();
     const f8 = fake([(o, n) => impl('bad-' + n)(o)]);
@@ -424,6 +424,22 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
       `${wd.status} ${wd.stdout.slice(-300)} ${wd.stderr.slice(-300)}`);
     const wd2 = spawnSync(process.execPath, [CLI, 'wait', c.id, '--root', r3, '--timeout-min', '0.01'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     R.check('[LP-62] wait: 이미 끝난 작업은 바로 보고한다', wd2.status === 0 && /"status":"done"/.test(wd2.stdout), `${wd2.status} ${wd2.stdout.slice(-200)}`);
+    }
+
+    // ── [2026-10-16 실측] 갱신 전에 시작한 세션은 옛 안내대로 --detach 없이 go 를 셸 안에서 돌렸다 — 세션의 안내와 상관없이
+    //    go 는 늘 분리된 프로세스로 작업을 띄우고 끝날 때까지 기다린다. 부른 쪽이 죽어도 작업은 끝까지 간다. ──
+    {
+      const slow3 = path.join(base, 'slow3-runner.js');
+      write(slow3, `const fs=require('fs'),p=require('path');exports.run=async o=>{await new Promise(r=>setTimeout(r,4000));fs.writeFileSync(p.join(o.cwd,'impl.txt'),'good');return{ok:true,session_id:o.newSessionId,final_text:'ok',cost_usd:0.1,is_error:false,error_kind:null,permission_denials:[]};};`);
+      const rf = checkRepo();
+      const caller = spawn(process.execPath, [CLI, 'go', 'make impl.txt say good', '--check', 'node check.js', '--root', rf], { env: { ...process.env, HARNESS_RUNNER_MODULE: slow3 }, stdio: 'ignore', windowsHide: true });
+      let id = null;
+      for (let i = 0; i < 300 && !id; i++) { await new Promise(r => setTimeout(r, 100)); const ts = S.listTasks(rf).filter(t => t.status === 'running'); if (ts.length) id = ts[0].id; }
+      caller.kill('SIGKILL');   // 세션 셸의 시간 상한 흉내 — 부른 프로세스가 죽는다
+      const wf = id ? spawnSync(process.execPath, [CLI, 'wait', id, '--root', rf, '--timeout-min', '2'], { encoding: 'utf8', windowsHide: true, timeout: 150000 }) : { status: null, stdout: 'no task' };
+      R.check('[LP-63] --detach 없이 부른 go 도 부른 프로세스가 죽어도 작업은 끝까지 간다(done) · wait 로 보고를 받는다', !!id && wf.status === 0 && /"status":"done"/.test(wf.stdout), `${id} ${wf.status} ${String(wf.stdout).slice(-300)}`);
+      const fg = spawnSync(process.execPath, [CLI, 'go', 'make impl.txt say good', '--check', 'node check.js', '--root', checkRepo()], { encoding: 'utf8', windowsHide: true, env: { ...process.env, HARNESS_RUNNER_MODULE: slow3 }, timeout: 120000 });
+      R.check('[LP-64] 부른 쪽이 살아 있으면 지금처럼 끝날 때까지 기다려 보고와 HARNESS_RESULT(done)를 낸다', fg.status === 0 && /"status":"done"/.test(fg.stdout) && /검사|checks/.test(fg.stdout), `${fg.status} ${fg.stdout.slice(-300)} ${fg.stderr.slice(-300)}`);
     }
 
     // ── [2026-10-16 사용자 지시] 시작 때 묻지 않고 지시를 바탕으로 끝까지 스스로 판단 — 결과를 바꾼 갈림길만 완성 뒤 보고에 정리한다 ──

@@ -23,7 +23,7 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | 명령 | 하는 일 |
 |---|---|
 | `go "<요청>"` | 자기 worktree 에서 끝까지 실행하고 보고서를 낸다 — `--goal-file` · `--check "<명령>"` · `--attach <파일>` · `--doc <문서>` · `--allow "<규칙>"` · `--runtime claude\|codex` · `--detach`(셸과 분리해 띄우고 id 를 바로 돌려준다) |
-| `wait <id>` | 작업이 끝날 때까지 기다려 보고를 낸다 — 에이전트 셸의 시간 상한에 걸려도 작업은 계속된다(`--detach` 와 함께) |
+| `wait <id>` | 작업이 끝날 때까지 기다려 보고를 낸다. `go` · `resume` 은 늘 셸과 분리된 프로세스에서 돌므로 부른 셸이 시간 상한으로 죽어도 작업은 계속되고, `wait` 로 보고를 다시 받는다 |
 | `status` · `stop <id>` · `resume <id>` | 현황(누적 비용 · 겹침 · 주인 없는 변경) · 멈춤(진행분 커밋) · 이어 가기 |
 | `accept <id>` · `cancel <id>` · `restore <id>` | 받아들이기(`--no-ff` 병합 · 사용자가 말한 뒤에만 · 테스트와 린트를 다시 본다) · 취소(revert) · 되살리기 |
 | `push [<remote>] [<branch>]` · `push [<remote>] --tag <이름>` | 빨리감기 push · 릴리스 태그 push(덮어쓰지 않는다) — 사용자가 명시한 뒤에만 |
