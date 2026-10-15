@@ -6,7 +6,7 @@
 //   끄기: 프로젝트 블록 auto_update: off · 환경 HARNESS_AUTO_UPDATE=off. 확인 기록: <git-common-dir>/harness/auto-update.json
 const fs = require('node:fs'), path = require('node:path');
 
-const DAY_MS = 24 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000, RETRY_MS = 3600 * 1000;   // 작업 중이라 미룬 갱신은 1시간 뒤 다시
 
 function enabled(root) {
   if (/^(off|0|false|no)$/i.test(String(process.env.HARNESS_AUTO_UPDATE || ''))) return false;
@@ -58,4 +58,4 @@ function commitUpdate(root, before, from, to) {
   return G.headSha(root);
 }
 
-module.exports = { enabled, maybe, readState, writeState, dirty, commitUpdate, DAY_MS };
+module.exports = { enabled, maybe, readState, writeState, dirty, commitUpdate, DAY_MS, RETRY_MS };

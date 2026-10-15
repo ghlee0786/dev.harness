@@ -53,6 +53,14 @@ const cli = (args, env) => new Promise(res => { const c = spawn(process.execPath
     // ── 자동 갱신(사용 시점 · 하루 한 번 · 작업 중엔 건너뜀 · 하네스 파일만 커밋) — [2026-10-13 사용자 결정 A] ──
     const u4 = await cli(['update', '--auto', '--root', repo], env);
     R.check('[UP-06] update --auto: 실행 중인 작업이 있으면 조용히 건너뛴다(exit 0 · 그대로)', u4.code === 0 && fs.readFileSync(path.join(repo, 'harness', 'VERSION'), 'utf8').trim() === '9.9.9', u4.out.slice(0, 300));
+    // [2026-10-15 실측] 작업 중이라 미룬 갱신이 하루 뒤에야 다시 시도됐다 — 옛 판(셸 상한에 죽는)이 그동안 계속 쓰였다. 1시간 뒤 다시 본다.
+    {
+      const AU0 = require('../../harness/lib/autoupdate'), now0 = Date.now(), seen = [];
+      const soon = AU0.maybe(repo, { spawn: r => seen.push(r), now: now0 + 10 * 60000 });
+      const later = AU0.maybe(repo, { spawn: r => seen.push(r), now: now0 + 70 * 60000 });
+      R.check('[UP-06b] 작업 중이라 미룬 자동 갱신은 하루가 아니라 1시간 뒤 다시 시도한다', !soon && later && seen.length === 1, JSON.stringify({ soon, later, state: AU0.readState(repo) }));
+      AU0.writeState(repo, {});
+    }
     // 하네스 파일을 git 에 넣어 둔 저장소 — 갱신은 하네스 파일만 따로 커밋, 사용자의 미커밋 변경은 그대로
     const repo2 = path.join(base, 'tracked'); fs.mkdirSync(repo2); git(repo2, 'init', '-q', '-b', 'main'); git(repo2, 'config', 'user.name', 't'); git(repo2, 'config', 'user.email', 't@example.invalid'); git(repo2, 'config', 'core.autocrlf', 'false');
     fs.writeFileSync(path.join(repo2, 'README.md'), '# t\n'); git(repo2, 'add', '-A'); git(repo2, 'commit', '-qm', 'init');

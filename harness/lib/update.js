@@ -52,7 +52,11 @@ async function update(o) {
   if (!asset) return { ...base, ok: false, updated: false, report: `릴리스 ${latest} 에 harness-*.tar.gz 가 없다 — 설치하지 않았다` };
   // 자동 갱신(--auto): 실행 중인 작업이 있으면 조용히 건너뛴다(다음 확인 때 다시) — 작업 도중 하네스를 바꾸지 않는다.
   const S = require('./state'), AU = require('./autoupdate');
-  if (o.auto && S.listTasks(root).some(t => t.status === 'running' && S.ownerAlive(t.owner))) return { ...base, updated: false, skipped: 'running', report: `자동 갱신 미룸 — 실행 중인 작업이 있다(${current} → ${latest})` };
+  //   [2026-10-15 실측] 미룬 갱신이 하루 뒤에야 다시 시도돼 옛 판이 계속 쓰였다 — 1시간 뒤 다시 보게 확인 시각을 당겨 둔다.
+  if (o.auto && S.listTasks(root).some(t => t.status === 'running' && S.ownerAlive(t.owner))) {
+    AU.writeState(root, { ...AU.readState(root), checked_at: Date.now() - AU.DAY_MS + AU.RETRY_MS });
+    return { ...base, updated: false, skipped: 'running', report: `자동 갱신 미룸 — 실행 중인 작업이 있다(${current} → ${latest}) · 1시간 뒤 다시 본다` };
+  }
   const before = o.auto ? AU.dirty(root) : null;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-update-'));
   try {
