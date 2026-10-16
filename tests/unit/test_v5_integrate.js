@@ -296,14 +296,15 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     const c16 = await I.cancel({ ...quiet, root: r16, id: t16.id });
     R.check('[IN-16] 등록 없는 빈 폴더가 남아도 cancel 은 사용자 브랜치에 아무것도 커밋하지 않는다', git(r16, ['rev-parse', 'HEAD']) === main16 && /someone else/.test(read(path.join(r16, 'b.txt'))) && /b\.txt/.test(git(r16, ['status', '--porcelain'])), `${git(r16, ['log', '--oneline', '-2'])} | ${git(r16, ['status', '--porcelain'])}`);
     R.check('[IN-16] 빈 폴더를 치우고 cancelled 로 닫는다(작업물은 태그에)', c16.status === 'cancelled' && !fs.existsSync(P16.wt) && git(r16, ['tag', '-l', `harness/cancelled/${t16.id}`]) === `harness/cancelled/${t16.id}`, JSON.stringify({ status: c16.status, reason: c16.reason, wt: fs.existsSync(P16.wt) }));
-    // 비어 있지 않은 남은 폴더(등록 없음)는 지우지도 커밋하지도 않고 거부한다.
+    // 비어 있지 않은 남은 폴더(등록 없음) — 사용자 브랜치에 커밋하지 않는다. 남은 파일은 지우지 않고 작업 기록에 보관한 뒤 치우고 닫는다(자동 이슈 #11).
     const r17 = mkRepo();
     const t17 = await goDone(r17, work());
     const P17 = S.taskPaths(r17, t17.id), main17 = git(r17, ['rev-parse', 'HEAD']);
     write(path.join(P17.wt, 'stray.txt'), 'left behind\n');
     write(path.join(r17, 'b.txt'), 'dirty elsewhere\n');
     const c17 = await I.cancel({ ...quiet, root: r17, id: t17.id });
-    R.check('[IN-17] 등록 없는 폴더에 파일이 있으면 커밋·삭제 없이 거부하고 이유를 말한다', c17.refused && /not this task's worktree/.test(c17.reason) && fs.existsSync(path.join(P17.wt, 'stray.txt')) && git(r17, ['rev-parse', 'HEAD']) === main17, JSON.stringify({ refused: c17.refused, reason: c17.reason }));
+    const lo17 = (fs.readdirSync(P17.dir).find(n => n.startsWith('leftover-')) || '');
+    R.check('[IN-17] 등록 없는 폴더에 파일이 있어도 사용자 브랜치에 커밋하지 않고 · 남은 파일은 작업 기록에 보관한 뒤 cancelled', c17.status === 'cancelled' && git(r17, ['rev-parse', 'HEAD']) === main17 && /dirty elsewhere/.test(read(path.join(r17, 'b.txt'))) && !!lo17 && read(path.join(P17.dir, lo17, 'stray.txt')) === 'left behind\n', JSON.stringify({ status: c17.status, reason: c17.reason, lo17 }));
     // 최후 방어선: 하네스 커밋은 worktree 루트가 아니면 던진다(하위 폴더에서 부르면 위 저장소를 커밋할 뻔했다).
     const G = require('../../harness/lib/git');
     fs.mkdirSync(path.join(r17, 'nested'), { recursive: true });
@@ -392,6 +393,34 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     R.check('[IN-25] resume: 남은 폴더(등록 없음)는 치우고 이어 간다(done) — 미커밋 변경은 작업 기록에 보관(자동 이슈 #10 · #11)',
       !e25 && s25 && s25.status === 'done' && !!lo25 && read(path.join(lo25, 'wip.txt')) === 'work in progress\n',
       e25 ? String(e25.stack).slice(0, 400) : `${s25 && s25.status} ${s25 && s25.reason} | ${lo25}`);
+    // ── [2026-10-16 자동 이슈 #15] go --base harness/<앞 작업> 으로 쌓은 작업 — accept 의 기본 대상이 그 harness 브랜치라 거부됐다 ──
+    const r28 = mkRepo();
+    const tA = await goDone(r28, work('ONE'));
+    const tB = await L.go({ ...quiet, root: r28, goal: 'more', checks: ['node check.js'], base: tA.branch, run: fake([o => write(path.join(o.cwd, 'b.txt'), 'bee two\n')]) });
+    const aB1 = await I.accept({ ...quiet, root: r28, id: tB.id });
+    R.check('[IN-28] 앞 작업이 아직 받아들여지지 않았으면 무엇을 먼저 할지(앞 작업 accept · --into) 알려 주며 거부한다',
+      tB.status === 'done' && aB1.refused && new RegExp(tA.id).test(aB1.reason) && /--into/.test(aB1.reason), `${tB.status} ${aB1.reason}`);
+    await I.accept({ ...quiet, root: r28, id: tA.id });
+    const aB2 = await I.accept({ ...quiet, root: r28, id: tB.id });
+    R.check('[IN-28] 앞 작업을 받아들인 뒤에는 --into 없이 그 대상(main)으로 들인다', aB2.status === 'accepted' && S.readTask(r28, tB.id).accepted_into === 'main' && read(path.join(r28, 'b.txt')) === 'bee two\n', `${aB2.status} ${aB2.reason}`);
+
+    // ── [2026-10-16 자동 이슈 #16] 편집기 · 빌드 서버가 남은 폴더를 잠가 accept 가 반복 거부됐다 — 그 자리를 못 비우면 옆 경로에 worktree 를 만들어 진행 ──
+    {
+      const r29 = mkRepo();
+      const t29 = await goDone(r29, work());
+      const P29 = halfRemoved(r29, t29);
+      fs.mkdirSync(path.join(P29.wt, 'busy'), { recursive: true });
+      // 이 폴더를 현재 디렉터리로 쓰는 프로세스(명령줄에는 경로가 없다 — 편집기 언어 서버처럼): Windows 에서는 폴더를 지울 수 없다
+      const busy = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { cwd: path.join(P29.wt, 'busy'), stdio: 'ignore', windowsHide: true });
+      await new Promise(r => setTimeout(r, 400));
+      const a29 = await I.accept({ ...quiet, root: r29, id: t29.id, removalWaitMs: 1500 });
+      const alt = S.readLog(r29, t29.id).find(e => e.event === 'worktree_alt');
+      const busyAlive = S.pidAlive(busy.pid);
+      try { process.kill(busy.pid); } catch { /* 끝났다 */ }
+      R.check('[IN-29] 잠긴 남은 폴더가 있어도 accept 는 진행한다(Windows: 옆 경로에 worktree 를 만든다) · 잠근 프로세스(편집기 같은)는 끝내지 않는다',
+        a29.status === 'accepted' && (process.platform !== 'win32' || !!alt) && busyAlive, `${a29.status} ${a29.reason} ${JSON.stringify(alt)}`);
+    }
+
     // 남은 폴더를 붙잡은 프로세스(폴더 안의 실행 파일 · 명령줄이 그 폴더를 가리킴 — 고아 testhost 같은)는 끝낸다
     const holdDir = path.join(base, 'hold-dir');
     write(path.join(holdDir, 'sleep.js'), 'setTimeout(()=>{},120000)');

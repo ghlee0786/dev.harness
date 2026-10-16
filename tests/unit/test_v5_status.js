@@ -138,6 +138,16 @@ const goEdit = (root, files, goal) => L.go({ ...quiet, root, goal: goal || 'edit
     const txtG = St.formatGc(gg);
     R.check('[SS-07][M4] 사람용 gc 출력에 남긴 이유', /build\.log/.test(txtG), txtG);
 
+    // ── [2026-10-16 자동 이슈 #16] 잠겨서 남은 폴더(등록 없음)는 gc 가 다시 치운다 — 원래 자리와 옆 경로(<id>-2) 모두 ──
+    {
+      const tpb = S.taskPaths(repo, b.id);
+      write(path.join(tpb.wt, 'left.txt'), 'left\n');
+      write(path.join(`${tpb.wt}-2`, 'left.txt'), 'left\n');
+      const g12 = St.gc({ root: repo });
+      R.check('[SS-12] gc: 등록이 사라진 남은 폴더(원래 자리 · 옆 경로)를 치우고, 브랜치와 다른 파일은 작업 기록에 보관한다',
+        !fs.existsSync(tpb.wt) && !fs.existsSync(`${tpb.wt}-2`) && fs.readdirSync(tpb.dir).some(n => n.startsWith('leftover-')), JSON.stringify({ removed: g12.removed, kept: g12.kept }));
+    }
+
     // ── [2026-10-15 자동 이슈 #6] 세션이 끊긴 뒤 task.json 이 공백만 남아 status 에서 작업이 조용히 사라졌다 ──
     const tf = S.taskPaths(repo, c.id).taskFile;
     const tc6 = S.readTask(repo, c.id); tc6.reason = 'second write'; S.writeTask(repo, tc6);   // 앞선 판이 .bak 에 남는다

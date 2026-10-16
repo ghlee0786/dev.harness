@@ -52,6 +52,10 @@ async function waitFile(f, ms) { const t0 = Date.now(); while (Date.now() - t0 <
     const FILTERS = ['grep', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'Select-String', 'Select-Object', 'Measure-Object', 'Sort-Object', 'Format-Table', 'Format-List', 'Out-String'];
     R.check('[RN-01b] allow: 읽기 전용 파이프 필터(grep · head · tail · Select-String · Select-Object …)를 두 셸 모두', FILTERS.every(f => allow.includes(`Bash(${f}:*)`) && allow.includes(`PowerShell(${f}:*)`)), JSON.stringify(allow));
     R.check('[RN-01b] allow: 쓰기 · 실행이 되는 도구(sed · find · xargs · awk · tee · ForEach-Object · Invoke-Expression)는 넣지 않는다', !allow.some(r => /\((sed|find|xargs|awk|tee|ForEach-Object|Invoke-Expression|iex|Set-Content|Out-File):/.test(r)), JSON.stringify(allow));
+    // [2026-10-16 자동 이슈 #12] 저장소 구조를 보는 읽기 전용 명령까지 거부돼 작업자가 우회하거나 정체됐다.
+    const RO = ['ls', 'cat', 'pwd', 'tree', 'stat', 'realpath', 'which', 'Get-ChildItem', 'Get-Content', 'Get-Item', 'Test-Path', 'Resolve-Path', 'Get-Location', 'git ls-files', 'git rev-parse', 'git grep', 'git blame', 'dotnet --list-sdks', 'dotnet --list-runtimes', 'dotnet --info'];
+    R.check('[RN-01c] allow: 저장소를 읽기만 하는 명령(ls · cat · Get-ChildItem · git ls-files · dotnet --list-sdks …)을 두 셸 모두', RO.every(f => allow.includes(`Bash(${f}:*)`) && allow.includes(`PowerShell(${f}:*)`)), JSON.stringify(allow));
+    R.check('[RN-01c] allow: find 는 넣지 않는다(-delete · -exec 로 지우거나 실행한다)', !allow.some(r => /\(find:/.test(r)), JSON.stringify(allow));
     R.check('[RN-01] allow 에 git 쓰기가 없다', !allow.some(r => /git (push|merge|reset|rebase|checkout|switch|branch|clean|commit)/.test(r)), JSON.stringify(allow));
     R.check('[RN-01] bypass 모드를 끈다', st.permissions.disableBypassPermissionsMode === 'disable');
     R.check('[RN-01] codexArgs = -s workspace-write, 위험 플래그 없음', JSON.stringify(policy.codexArgs()) === JSON.stringify(['-s', 'workspace-write']));

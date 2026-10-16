@@ -442,6 +442,21 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
       R.check('[LP-64] 부른 쪽이 살아 있으면 지금처럼 끝날 때까지 기다려 보고와 HARNESS_RESULT(done)를 낸다', fg.status === 0 && /"status":"done"/.test(fg.stdout) && /검사|checks/.test(fg.stdout), `${fg.status} ${fg.stdout.slice(-300)} ${fg.stderr.slice(-300)}`);
     }
 
+    // ── [2026-10-16 자동 이슈 #13] 저장소에서 찾은 검사가 새 worktree 에서 작업 전부터 시간 초과 — 작업과 무관하게 같은 실패 2회로 정체됐다.
+    //    자동으로 찾은 검사가 기준선에서 시간 초과면 판정에서 빼고 알린다. 사용자가 준 검사(--check)는 빼지 않는다. ──
+    {
+      const SLOW = "setTimeout(()=>console.log('# pass 1\\n# fail 0'),8000)";
+      const r90 = mkRepo({ 'slow.js': SLOW, 'AGENTS.md': '```yaml\ntest_command: "node slow.js"\n```\n' });
+      const t90 = await L.go({ ...quiet, root: r90, goal: 'make impl.txt say good', checkTimeoutMs: 1500, run: fake([impl('good')]) });
+      const k90 = S.readTask(r90, t90.id);
+      R.check('[LP-90] 자동으로 찾은 검사가 기준선부터 시간 초과면 판정에서 빼고(정체되지 않는다) 보고에 알린다',
+        t90.status === 'done' && (k90.checks.dropped || []).length === 1 && !k90.checks.commands.length && /node slow\.js/.test(t90.report) && /(dropped|뺐다)/.test(t90.report), `${t90.status} ${t90.reason} ${JSON.stringify(k90.checks.dropped)}`);
+      const r91 = mkRepo({ 'slow.js': SLOW });
+      const t91 = await L.go({ ...quiet, root: r91, goal: 'make impl.txt say good', checks: ['node slow.js'], checkTimeoutMs: 1500, run: fake([impl('good')]) });
+      const k91 = S.readTask(r91, t91.id);
+      R.check('[LP-91] 사용자가 준 검사(--check)는 기준선에서 시간 초과여도 빼지 않는다', !(k91.checks.dropped || []).length && k91.checks.commands.length === 1, JSON.stringify(k91.checks));
+    }
+
     // ── [2026-10-15 자동 이슈 #9] 진행 중에 요구사항을 덧붙일 길이 없어 stop → cancel → 다시 go 를 되풀이했다 — note <id> 로 넣는다 ──
     {
       const rn = checkRepo();
@@ -472,6 +487,8 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
         tk.status === 'done' && tkk.decisions && tkk.decisions.length === 2 && tkk.decisions[0].title === '날짜 형식' && tkk.decisions[0].body.some(l => /ISO 8601/.test(l)), JSON.stringify(tkk.decisions));
       R.check('[LP-71] 한국어 보고: 맨 위 요약 다음에 "결정 분기점 2곳" 과 각 분기점의 선택 · 이유가 있다',
         /결정 분기점: 2곳/.test(tk.report) && /1\. 날짜 형식/.test(tk.report) && /고른 것: ISO 8601/.test(tk.report) && tk.report.indexOf('결정 분기점') < tk.report.indexOf('브랜치:'), tk.report.slice(0, 900));
+      // [2026-10-16 자동 이슈 #14] 보고는 "resume 으로 지시하라" 고 했지만 resume 은 지시를 받지 못했다 — 실제로 되는 명령을 적는다.
+      R.check('[LP-75] 결정 분기점을 바꾸는 방법은 실제 명령으로(resume <id> --note · note <id> --file)', new RegExp(`resume ${tk.id} --note`).test(tk.report) && new RegExp(`note ${tk.id} --file`).test(tk.report), tk.report.slice(0, 900));
       const tn = await go(checkRepo(), { run: fake([impl('good')]) });
       R.check('[LP-72] 갈림길이 없었으면 보고에 없다고 분명히 적는다', /decision points: none/.test(tn.report), tn.report.slice(0, 500));
       const pr = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, language: 'Korean' });
