@@ -353,15 +353,19 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     spawn(process.execPath, ['-e', `setTimeout(()=>require('fs').rmSync(${JSON.stringify(P22.wt)},{recursive:true,force:true}),1000)`], { stdio: 'ignore', windowsHide: true });
     const a22 = await I.accept({ ...quiet, root: r22, id: t22.id, removalWaitMs: 15000 });
     R.check('[IN-22] 삭제 중인 worktree 가 곧 비워지면 accept 는 기다렸다가 병합한다', a22.status === 'accepted' && !a22.refused && parents(r22, 'main') === 2, `${a22.status} ${a22.reason}`);
+    // [2026-10-15 자동 이슈 #11] 남은 폴더가 사라지지 않으면 사람이 지워야 했다 — 브랜치와 같은 파일은 지우고, 다른 파일은 작업 기록 폴더에 보관한 뒤 진행한다.
+    const leftoverOf = (r, id) => { const d = S.taskPaths(r, id).dir; return (fs.readdirSync(d).find(n => n.startsWith('leftover-')) || null) && path.join(d, fs.readdirSync(d).find(n => n.startsWith('leftover-'))); };
     const r23 = mkRepo();
     const t23 = await goDone(r23, work());
     const P23 = halfRemoved(r23, t23);
-    const main23 = git(r23, ['rev-parse', 'main']);
+    write(path.join(P23.wt, 'feature.txt'), 'changed after the task\n');   // 브랜치와 다른 파일
+    write(path.join(P23.wt, 'stray.txt'), 'only here\n');                  // 브랜치에 없는 파일
     let a23 = null, e23 = null;
     try { a23 = await I.accept({ ...quiet, root: r23, id: t23.id, removalWaitMs: 500 }); } catch (e) { e23 = e; }
-    R.check('[IN-23] 삭제 중인 worktree 가 끝내 남아 있으면 예외 없이 거부하고 이유를 말한다 · main 그대로 · 남은 파일은 건드리지 않는다',
-      !e23 && a23 && a23.refused && /still being removed/.test(a23.reason) && git(r23, ['rev-parse', 'main']) === main23 && fs.existsSync(path.join(P23.wt, 'a.txt')),
-      e23 ? String(e23.stack).slice(0, 400) : `${a23 && a23.status} ${a23 && a23.reason}`);
+    const lo23 = leftoverOf(r23, t23.id);
+    R.check('[IN-23] 남은 폴더(등록 없음)는 치우고 진행한다 — 브랜치와 다른 파일만 작업 기록에 보관(같은 파일은 보관하지 않는다)',
+      !e23 && a23 && a23.status === 'accepted' && !!lo23 && read(path.join(lo23, 'stray.txt')) === 'only here\n' && read(path.join(lo23, 'feature.txt')) === 'changed after the task\n' && !fs.existsSync(path.join(lo23, 'a.txt')),
+      e23 ? String(e23.stack).slice(0, 400) : `${a23 && a23.status} ${a23 && a23.reason} | ${lo23}`);
 
     // ── [2026-10-14 자동 이슈 #3] accept 가 새로 만든 worktree 에서 린트를 복원 없이 돌려 거절 — 루프에서는 빌드 산출물(obj/)이 있어 통과했다.
     //    작업 뒤 브랜치가 그대로이고 대상 브랜치를 들이지 않았으면 루프의 린트 통과를 그대로 쓴다. ──
@@ -381,14 +385,21 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     const r25 = mkRepo();
     const t25 = await goDone(r25, work());
     const P25 = leftover(r25, t25);
+    write(path.join(P25.wt, 'wip.txt'), 'work in progress\n');   // 죽은 실행이 남긴 미커밋 변경
     let e25 = null, s25 = null;
     try { s25 = await L.resume({ ...quiet, root: r25, id: t25.id, run: work(), removalWaitMs: 500 }); } catch (e) { e25 = e; }
-    R.check('[IN-25] resume: 지워지는 중인 예전 worktree 가 끝내 남으면 예외 없이 interrupted · 이유를 말한다 · 남은 파일은 건드리지 않는다',
-      !e25 && s25 && s25.status === 'interrupted' && /still being removed/.test(s25.reason) && fs.existsSync(path.join(P25.wt, 'a.txt')),
-      e25 ? String(e25.stack).slice(0, 400) : `${s25 && s25.status} ${s25 && s25.reason}`);
-    spawn(process.execPath, ['-e', `setTimeout(()=>require('fs').rmSync(${JSON.stringify(P25.wt)},{recursive:true,force:true}),1000)`], { stdio: 'ignore', windowsHide: true });
-    const s26 = await L.resume({ ...quiet, root: r25, id: t25.id, run: work(), removalWaitMs: 15000 });
-    R.check('[IN-26] resume: 남은 파일이 곧 사라지면 기다렸다가 이어 간다', s26.status === 'done', `${s26.status} ${s26.reason}`);
+    const lo25 = leftoverOf(r25, t25.id);
+    R.check('[IN-25] resume: 남은 폴더(등록 없음)는 치우고 이어 간다(done) — 미커밋 변경은 작업 기록에 보관(자동 이슈 #10 · #11)',
+      !e25 && s25 && s25.status === 'done' && !!lo25 && read(path.join(lo25, 'wip.txt')) === 'work in progress\n',
+      e25 ? String(e25.stack).slice(0, 400) : `${s25 && s25.status} ${s25 && s25.reason} | ${lo25}`);
+    // 남은 폴더를 붙잡은 프로세스(폴더 안의 실행 파일 · 명령줄이 그 폴더를 가리킴 — 고아 testhost 같은)는 끝낸다
+    const holdDir = path.join(base, 'hold-dir');
+    write(path.join(holdDir, 'sleep.js'), 'setTimeout(()=>{},120000)');
+    const holder = spawn(process.execPath, [path.join(holdDir, 'sleep.js')], { stdio: 'ignore', windowsHide: true });
+    await new Promise(r => setTimeout(r, 500));
+    const killed = require('../../harness/lib/git').killProcsIn(holdDir);
+    await new Promise(r => setTimeout(r, 500));
+    R.check('[IN-26] 폴더를 붙잡은 프로세스를 찾아 끝낸다(이 프로세스 · 조상은 빼고)', killed.some(k => k.pid === holder.pid) && !S.pidAlive(holder.pid), JSON.stringify(killed));
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 임시 디렉터리 정리 실패는 결과와 무관 */ } }
   R.done();

@@ -442,6 +442,26 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
       R.check('[LP-64] 부른 쪽이 살아 있으면 지금처럼 끝날 때까지 기다려 보고와 HARNESS_RESULT(done)를 낸다', fg.status === 0 && /"status":"done"/.test(fg.stdout) && /검사|checks/.test(fg.stdout), `${fg.status} ${fg.stdout.slice(-300)} ${fg.stderr.slice(-300)}`);
     }
 
+    // ── [2026-10-15 자동 이슈 #9] 진행 중에 요구사항을 덧붙일 길이 없어 stop → cancel → 다시 go 를 되풀이했다 — note <id> 로 넣는다 ──
+    {
+      const rn = checkRepo();
+      let nid = null;
+      const fn = fake([o => { nid = path.basename(o.cwd); impl('good')(o); L.addNote(rn, nid, '버튼 색은 파랑으로'); }, o => impl('good')(o)]);
+      const tn1 = await L.go({ ...quiet, root: rn, goal: 'make impl.txt say good', checks: ['node check.js'], run: fn });
+      R.check('[LP-80] 도는 중에 넣은 추가 지시: 검사가 통과해 끝나려던 참이면 그 지시를 담은 턴을 한 번 더 돈다',
+        tn1.status === 'done' && fn.calls.length === 2 && /버튼 색은 파랑으로/.test(fn.calls[1].prompt) && S.readLog(rn, tn1.id).some(e => e.event === 'notes_delivered'), `${tn1.status} ${fn.calls.length} ${String(fn.calls[1] && fn.calls[1].prompt).slice(0, 300)}`);
+      L.addNote(rn, tn1.id, '제목도 바꿔 줘');
+      const fn2 = fake([o => impl('good')(o)]);
+      const rs2 = await L.resume({ ...quiet, root: rn, id: tn1.id, run: fn2 });
+      R.check('[LP-81] 끝난(done) 작업도 전달하지 않은 추가 지시가 있으면 resume 으로 이어 가 첫 메시지에 담는다',
+        rs2.status === 'done' && fn2.calls.length === 1 && /제목도 바꿔 줘/.test(fn2.calls[0].prompt), `${rs2.status} ${rs2.reason} ${String(fn2.calls[0] && fn2.calls[0].prompt).slice(0, 300)}`);
+      const rs3 = await L.resume({ ...quiet, root: rn, id: tn1.id, run: fake([o => impl('good')(o)]) });
+      R.check('[LP-82] 전달할 지시가 없는 done 작업의 resume 은 여전히 거부한다', rs3.refused && /status is done/.test(rs3.reason), JSON.stringify(rs3).slice(0, 200));
+      const nf = path.join(base, 'note.txt'); write(nf, '로그 레벨은 INFO');
+      const cn = spawnSync(process.execPath, [CLI, 'note', tn1.id, '--file', nf, '--root', rn], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+      R.check('[LP-83] CLI note <id> --file: 지시를 쌓고 언제 전달되는지 말한다', cn.status === 0 && /resume/.test(cn.stdout) && L.pendingNotes(rn, tn1.id).some(n => /INFO/.test(n.text)), `${cn.status} ${cn.stdout} ${cn.stderr}`);
+    }
+
     // ── [2026-10-16 사용자 지시] 시작 때 묻지 않고 지시를 바탕으로 끝까지 스스로 판단 — 결과를 바꾼 갈림길만 완성 뒤 보고에 정리한다 ──
     {
       const DEC = '# 결정\n\n## 1. 날짜 형식\n- 선택지: ISO 8601 / 로캘 형식\n- 고른 것: ISO 8601\n- 이유: 기존 API 가 ISO 를 쓴다\n- 결과: 응답이 2026-10-16 형태 · 바꾸려면 formatDate 한 곳\n\n## 2. 빈 목록 처리\n- 고른 것: 빈 배열(오류 아님)\n- 이유: 호출부가 길이로 분기한다\n';

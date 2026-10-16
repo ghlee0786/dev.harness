@@ -137,6 +137,17 @@ const goEdit = (root, files, goal) => L.go({ ...quiet, root, goal: goal || 'edit
     R.check('[SS-07][M4] ignoredChanged: 무시된 폴더는 펼쳐 파일로 · .env 복사분은 빠진다', ignE.includes('build.log') && ignE.includes('dist.log/inner/a.bin') && !ignE.some(p => p.startsWith('.env')), JSON.stringify(ignE));
     const txtG = St.formatGc(gg);
     R.check('[SS-07][M4] 사람용 gc 출력에 남긴 이유', /build\.log/.test(txtG), txtG);
+
+    // ── [2026-10-15 자동 이슈 #6] 세션이 끊긴 뒤 task.json 이 공백만 남아 status 에서 작업이 조용히 사라졌다 ──
+    const tf = S.taskPaths(repo, c.id).taskFile;
+    const tc6 = S.readTask(repo, c.id); tc6.reason = 'second write'; S.writeTask(repo, tc6);   // 앞선 판이 .bak 에 남는다
+    fs.writeFileSync(tf, '   \n\n  ');
+    const back = S.readTask(repo, c.id);
+    R.check('[SS-11] task.json 이 깨지면 직전 판(.bak)으로 읽는다 — 작업이 사라지지 않는다', back && back.id === c.id && S.listTasks(repo).some(t => t.id === c.id), JSON.stringify(back && { id: back.id, status: back.status }));
+    fs.writeFileSync(`${tf}.bak`, '');
+    const s9 = St.status({ root: repo });
+    const txt9 = St.formatStatus(s9);
+    R.check('[SS-11] 둘 다 깨지면 status 가 "손상" 줄로 보이고 기록(log.jsonl)의 위치와 목표를 알려 준다', (s9.broken || []).some(x => x.id === c.id && /task c/.test(x.goal)) && new RegExp(`${c.id}.*(BROKEN|손상)`).test(txt9) && /log\.jsonl/.test(txt9), txt9);
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 임시 디렉터리 정리 실패는 결과와 무관 */ } }
   R.done();

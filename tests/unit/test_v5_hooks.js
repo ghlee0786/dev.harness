@@ -330,6 +330,15 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
     } finally { C.git = realGit; }
     const logAfter = errLogOf(dp);
     R.check('[L10/oldgit] 대체 경로를 쓴 것은 hook-errors.log 에 남는다', logAfter.length > logBefore.length && /path-format/.test(logAfter.slice(logBefore.length)), logAfter.slice(-300));
+    // [2026-10-15 자동 이슈 #7] 부하로 git 이 시간 초과(ETIMEDOUT)된 것을 "git < 2.31" 로 기록했다 — 옛 git 이 아니다. 대체 경로로 찾되 기록하지 않는다.
+    {
+      const before7 = errLogOf(dp);
+      const script = `const C=require(${JSON.stringify(path.join(HOOKS, '_common.js'))});const real=C.git;C.git=(cwd,args,o)=>args.includes('--path-format=absolute')?{status:-1,stdout:'',stderr:'spawnSync git ETIMEDOUT'}:real(cwd,args,o);const ri=C.repoInfo(${JSON.stringify(path.join(dp, 'junk'))});process.stdout.write(JSON.stringify(ri))`;
+      const r7 = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', windowsHide: true, env: ENV, timeout: 30000 });
+      let ri7 = null; try { ri7 = JSON.parse(r7.stdout); } catch { /* 없음 */ }
+      const after7 = errLogOf(dp).slice(before7.length);
+      R.check('[L10/timeout] git 시간 초과는 대체 경로로 찾고 "옛 git" 으로 기록하지 않는다(자동 이슈 #7)', ri7 && C.samePath(ri7.root, dp) && !/path-format/.test(after7), `${r7.stdout} ${r7.stderr} | ${after7}`);
+    }
 
     // [L10] 세션 잠금 — 오래된 잠금 빼앗기는 토큰을 확인한다(M5 와 같은 경합) · 해제는 자기 잠금만.
     const lk = mkRepo('lock', { 'a.js': 'a\n' });
