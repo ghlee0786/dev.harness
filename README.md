@@ -39,7 +39,8 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | 격리 | 작업마다 worktree · 브랜치. 무인 작업자는 push 경로가 막히고 이 저장소의 브랜치 · 태그를 바꾸지 못한다(git `reference-transaction` 훅) |
 | git 안전 | 대화형 세션의 `git push` · `reset --hard` · `clean -f` · `rebase` · 직접 `merge` · `stash` · 별칭 · `python -c`/`node -e` 로 감싼 git 쓰기를 막는다 |
 | 판정 | 저장소 테스트의 종료 코드와 작업 전 기준선 비교(나빠지지 않음). 실패하면 **한 번 더 돌려** 불안정한 검사는 작업자에게 돌려보내지 않는다 |
-| 린트 | `lint_command` — 테스트 다음의 두 번째 결정적 검사. `{files}` 는 작업이 바꾼 파일만 |
+| 린트 · 중복 코드 | `lint_command` — 테스트 다음의 두 번째 결정적 검사(`{files}` 는 작업이 바꾼 파일만). 그리고 **중복 코드 검사**: 작업이 새로 쓴 코드가 있는 코드를 블록째(공백 빼고 8줄 이상) 베꼈으면 위치를 알려 한 번 돌려보낸다(그래도 남으면 막지 않고 보고) |
+| 작업자 권한 | 기본 `open` — 명령을 막지 않는다. 막는 것은 git 쓰기 · push(git 수준) · worktree 밖 삭제(guard)뿐. `worker_permissions: strict` 면 예전 허용 목록 |
 | 보고 | 요약 · 다음 할 일 · 주의 · 검사 결과 · **변경 규모(+추가/-삭제 줄 · 새 파일)** · 비용 · 시간 |
 | 끝까지 | 시작 때도 도중에도 묻지 않는다 — 결과를 바꾸는 갈림길은 지시에 맞고 바꾸기 쉬운 쪽을 골라 계속하고, 완성 뒤 보고에 **결정 분기점(분기점 · 고른 것 · 이유 · 결과)** 으로 정리한다. 같은 세션 이어 가기 · 막히면 BLOCKED.md · `resume --allow` 로 이어 감 |
 | 멀티모달 | `--attach` — 이미지 · PDF 는 그대로, 영상은 장면 이미지 + 전사, 음성은 전사(ffmpeg · faster-whisper 가 있으면 자동) |
@@ -57,8 +58,10 @@ lint_command: "npx eslint {files}"       # 두 번째 판정 — {files} 는 작
 check_timeout_min: 20                    # 검사 상한(기본 15분)
 rerun_failed: on                         # 실패한 검사 재실행(off 로 끈다)
 serial_checks: true                      # 검사를 프로젝트 단위로 하나씩(공유 시험 DB · 포트 — 기본은 동시)
+dup_check: on                            # 중복 코드 검사(off 로 끈다) · dup_min_lines: 8
+worker_permissions: open                 # 작업자 명령을 막지 않는다(strict: 예전 허용 목록)
 reply_language: "Korean"                 # 작업자의 기록 · 보고 언어(목표에 한글이 있으면 기본 Korean)
-worker_allow: ["Bash(docker build:*)"]   # 무인 작업자에게 더 허용할 명령(git 쓰기 · 셸은 거부)
+worker_allow: ["Bash(docker build:*)"]   # strict 일 때 무인 작업자에게 더 허용할 명령(git 쓰기 · 셸은 거부)
 worktree_links: ["../SiblingRepo"]       # 저장소 밖 형제 폴더를 참조하는 빌드
 outside_git_ok: ["data/*.db"]            # worktree 를 붙잡지 않는 런타임 부산물
 transcribe_command: "whisper \"{in}\" --output_dir \"{outdir}\""   # 전사기(없으면 faster-whisper · whisper 자동)

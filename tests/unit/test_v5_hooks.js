@@ -409,6 +409,20 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
     R.check('[lang] 영어로 묻는 세션에는 아무것도 하지 않는다(덧붙임 · 되돌림 없음)', isAllow(enUp) && isAllow(lang('Stop', { last_assistant_message: EN, stop_hook_active: false }, 'L2')));
     R.check('[lang] 저장소 밖 · 깨진 입력은 조용히 통과', isAllow(hook('lang', { hook_event_name: 'Stop', session_id: 'x', cwd: base, last_assistant_message: EN })) && isAllow(hook('lang', 'not json')) && fs.existsSync(path.join(hookTmp, 'harness', 'hook-errors.log')));
 
+    // ── [2026-10-16 사용자 지시 · 실측] 작업자 명령을 허용 목록으로 막지 않는다(open) — 대신 guard 가 작업자 모드(--worker)에서
+    //    자기 worktree 밖의 삭제를 막는다(실측: open 설정에서 저장소 밖 폴더 rm -rf 가 통과했다). 대화형 모드는 그대로. ──
+    {
+      const wrepo = mkRepo('guard-worker', { 'a.txt': 'a\n', 'build/out.txt': 'x\n' });
+      const outside = path.join(base, 'outside-of-worktree');
+      fs.mkdirSync(outside, { recursive: true }); fs.writeFileSync(path.join(outside, 'k.txt'), 'k');
+      const wpre = (command, tool, args) => hook('guard', { hook_event_name: 'PreToolUse', session_id: 'w1', cwd: wrepo, tool_name: tool || 'Bash', tool_input: { command } }, args || ['--worker'], wrepo);
+      const blockedOut = [[`rm -rf "${outside.replace(/\\/g, '/')}"`, 'Bash'], [`rm "${path.join(outside, 'k.txt').replace(/\\/g, '/')}"`, 'Bash'], [`Remove-Item -Recurse -Force "${outside}"`, 'PowerShell'], [`rm -rf ../outside-of-worktree`, 'Bash']];
+      const res = blockedOut.map(([c, t]) => [c, isDeny(wpre(c, t))]);
+      R.check('[guard/worker] 작업자 모드: worktree 밖 삭제(재귀 · 단일 파일 · PowerShell)를 막는다', res.every(x => x[1]), JSON.stringify(res));
+      R.check('[guard/worker] 작업자 모드: worktree 안 삭제 · 일반 명령은 통과', isAllow(wpre('rm -rf build')) && isAllow(wpre('rm a.txt')) && isAllow(wpre('node -v | head -1')) && isAllow(wpre('for i in 1 2; do echo $i; done')));
+      R.check('[guard/worker] 대화형 모드(인자 없음)는 예전 그대로 — 저장소 밖 일반 폴더 삭제는 막지 않는다', isAllow(wpre(`rm -rf "${outside.replace(/\\/g, '/')}"`, 'Bash', [])));
+    }
+
     R.check('[격리] 가짜 HOME 에 .claude · .codex 가 생기지 않았다', !fs.existsSync(path.join(home, '.claude')) && !fs.existsSync(path.join(home, '.codex')));
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 임시 디렉터리 정리 실패는 결과와 무관 */ } }

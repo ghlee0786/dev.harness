@@ -56,6 +56,13 @@ async function waitFile(f, ms) { const t0 = Date.now(); while (Date.now() - t0 <
     const RO = ['ls', 'cat', 'pwd', 'tree', 'stat', 'realpath', 'which', 'Get-ChildItem', 'Get-Content', 'Get-Item', 'Test-Path', 'Resolve-Path', 'Get-Location', 'git ls-files', 'git rev-parse', 'git grep', 'git blame', 'dotnet --list-sdks', 'dotnet --list-runtimes', 'dotnet --info'];
     R.check('[RN-01c] allow: 저장소를 읽기만 하는 명령(ls · cat · Get-ChildItem · git ls-files · dotnet --list-sdks …)을 두 셸 모두', RO.every(f => allow.includes(`Bash(${f}:*)`) && allow.includes(`PowerShell(${f}:*)`)), JSON.stringify(allow));
     R.check('[RN-01c] allow: find 는 넣지 않는다(-delete · -exec 로 지우거나 실행한다)', !allow.some(r => /\(find:/.test(r)), JSON.stringify(allow));
+    // [2026-10-16 사용자 지시] 작업자 명령을 거부하지 말 것 — 허용 목록은 경계가 아니었다(node · python 으로 무엇이든 돈다) · 거부율 19%.
+    //   open(기본): 명령은 다 허용 · git 쓰기는 deny 그대로 · 되돌릴 수 없는 명령은 guard 훅(대화형과 같은 것)이 거른다.
+    const op = policy.claudeSettings(['node'], [], 'open');
+    R.check('[RN-01d] open: Bash · PowerShell 전부 허용 · git 쓰기 deny 는 그대로', op.permissions.allow.includes('Bash(*)') && op.permissions.allow.includes('PowerShell(*)') && op.permissions.deny.includes('Bash(git push:*)') && op.permissions.deny.includes('PowerShell(git commit:*)'), JSON.stringify(op.permissions));
+    const gh = (((op.hooks || {}).PreToolUse || [])[0] || {});
+    R.check('[RN-01d] open: guard 훅(hooks/guard.js)을 Bash · PowerShell 앞에 건다', /Bash/.test(gh.matcher || '') && /PowerShell/.test(gh.matcher || '') && (gh.hooks || []).some(h => /--worker/.test(h.command) && fs.existsSync((/"([^"]+guard\.js)"/.exec(h.command) || [])[1] || '')), JSON.stringify(op.hooks));
+    R.check('[RN-01d] strict(예전): 기본 인자는 그대로 허용 목록', !allow.includes('Bash(*)') && !st.hooks, JSON.stringify(allow).slice(0, 200));
     R.check('[RN-01] allow 에 git 쓰기가 없다', !allow.some(r => /git (push|merge|reset|rebase|checkout|switch|branch|clean|commit)/.test(r)), JSON.stringify(allow));
     R.check('[RN-01] bypass 모드를 끈다', st.permissions.disableBypassPermissionsMode === 'disable');
     R.check('[RN-01] codexArgs = -s workspace-write, 위험 플래그 없음', JSON.stringify(policy.codexArgs()) === JSON.stringify(['-s', 'workspace-write']));

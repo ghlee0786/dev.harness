@@ -92,6 +92,43 @@ const steps = list => { const calls = []; const run = async o => { const n = cal
     const ts2 = await L.go({ ...quiet, root: rs2, goal: 'x', run: async o => { write(path.join(o.cwd, 'f.txt'), 'x\n'); return { ok: true, session_id: 's', final_text: 'ok', cost_usd: 0, is_error: false, permission_denials: [] }; } });
     const ts1 = await L.go({ ...quiet, root: rs, goal: 'x', run: async o => { write(path.join(o.cwd, 'f.txt'), 'x\n'); return { ok: true, session_id: 's', final_text: 'ok', cost_usd: 0, is_error: false, permission_denials: [] }; } });
     R.check('[SC-02] 프로젝트 블록 serial_checks: true → 작업에 기록(resume · accept 도 같은 값) · 없으면 꺼짐', S.readTask(rs2, ts2.id).checks.serial === true && !S.readTask(rs, ts1.id).checks.serial, `${ts2.status} ${JSON.stringify(S.readTask(rs2, ts2.id).checks.serial)} ${JSON.stringify(S.readTask(rs, ts1.id).checks.serial)}`);
+
+    // ── [2026-10-16 사용자 지시 · 영상 「쓰레기 코드 없애는 법」] 중복 코드 — 작업이 더한 코드가 있는 코드를 블록째 베꼈는가 ──
+    const Dup = require('../../harness/lib/dup');
+    const FN = ['function total(items) {', '  let sum = 0;', '  for (const it of items) {', '    if (!it || it.skip) continue;', '    const v = Number(it.price) * Number(it.qty || 1);', '    if (Number.isNaN(v)) throw new Error("bad item");', '    sum += v;', '  }', '  const tax = Math.round(sum * 0.1);', '  return sum + tax;', '}', ''].join('\n');
+    const dupRepo = () => { const d = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n` }); return d; };
+    const commitIn = (d, files) => { for (const [f, t] of Object.entries(files)) write(path.join(d, f), t); git(d, 'add', '-A'); git(d, 'commit', '-qm', 'work'); };
+    {
+      const d1 = dupRepo(), b1 = git(d1, 'rev-parse', 'HEAD');
+      commitIn(d1, { 'src/b.js': `// copied\n${FN.replace('function total', 'function total2')}module.exports = { total2 };\n` });
+      const f1 = Dup.find(d1, b1);
+      R.check('[DU-01] 작업이 있는 함수를 그대로 베끼면(이름만 바꿔도 나머지 줄) 위치와 원본을 찾는다', f1.length === 1 && f1[0].file === 'src/b.js' && /src\/a\.js:\d+-\d+/.test(f1[0].other) && f1[0].lines >= 8, JSON.stringify(f1));
+      const d2 = dupRepo(), b2 = git(d2, 'rev-parse', 'HEAD');
+      commitIn(d2, { 'src/c.js': 'const { total } = require("./a");\nmodule.exports = items => total(items.filter(Boolean));\n' });
+      R.check('[DU-02] 있는 함수를 불러 쓰면 중복이 아니다', Dup.find(d2, b2).length === 0);
+      const d3 = repo(null), b3 = git(d3, 'rev-parse', 'HEAD');
+      commitIn(d3, { 'src/n.js': `${FN}${FN.replace('function total', 'function again')}` });
+      R.check('[DU-03] 새로 더한 코드 안에서 같은 블록을 두 번 쓴 것도 찾는다', Dup.find(d3, b3).length === 1, JSON.stringify(Dup.find(d3, b3)));
+      const d4 = dupRepo(), b4 = git(d4, 'rev-parse', 'HEAD');
+      commitIn(d4, { 'tests/a.test.js': FN, 'src/a.generated.js': FN });
+      R.check('[DU-04] 테스트 · 생성 파일은 보지 않는다', Dup.find(d4, b4).length === 0, JSON.stringify(Dup.find(d4, b4)));
+    }
+    {
+      // 루프: 베낀 첫 턴 → 하네스가 한 번 돌려보냄 → 둘째 턴에 재사용으로 고침 → done · 중복 없음
+      const d5 = dupRepo();
+      const f5 = fake5 => fake5;
+      const calls5 = [];
+      const run5 = async o => { calls5.push(o.prompt); if (calls5.length === 1) write(path.join(o.cwd, 'src/b.js'), `${FN.replace('function total', 'function total2')}module.exports = { total2 };\n`); else write(path.join(o.cwd, 'src/b.js'), 'const { total } = require("./a");\nmodule.exports = { total2: total };\n'); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; };
+      const t5 = await L.go({ ...quiet, root: d5, goal: 'add total2', run: run5 });
+      R.check('[DU-05] 루프: 중복을 만든 턴은 위치를 알려 한 번 돌려보내고, 고치면 done(보고에 중복 없음)', t5.status === 'done' && calls5.length === 2 && /duplicat/i.test(calls5[1]) && /src\/a\.js/.test(calls5[1]) && /duplicate code: none/.test(t5.report), `${t5.status} ${calls5.length} ${t5.report.slice(0, 400)}`);
+      const d6 = dupRepo(); const calls6 = [];
+      const run6 = async o => { calls6.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), `${FN.replace('function total', 'function total2')}module.exports = { total2 };\n`); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; };
+      const t6 = await L.go({ ...quiet, root: d6, goal: 'add total2', run: run6 });
+      R.check('[DU-06] 돌려보내도 남으면 막지 않고(done · 정체 아님) 보고 맨 위 주의에 남긴다', t6.status === 'done' && calls6.length === 2 && /중복|duplicate/i.test(t6.report.split('\n').slice(0, 6).join('\n')), `${t6.status} ${calls6.length} ${t6.report.slice(0, 500)}`);
+      const d7 = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n`, 'CLAUDE.md': '```yaml\ndup_check: off\n```\n' }); const calls7 = [];
+      const t7 = await L.go({ ...quiet, root: d7, goal: 'add total2', run: async o => { calls7.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), FN.replace('function total', 'function total2')); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; } });
+      R.check('[DU-07] dup_check: off 면 보지 않는다', t7.status === 'done' && calls7.length === 1, `${t7.status} ${calls7.length}`);
+    }
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }
   R.done();

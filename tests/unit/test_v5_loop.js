@@ -442,6 +442,18 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
       R.check('[LP-64] 부른 쪽이 살아 있으면 지금처럼 끝날 때까지 기다려 보고와 HARNESS_RESULT(done)를 낸다', fg.status === 0 && /"status":"done"/.test(fg.stdout) && /검사|checks/.test(fg.stdout), `${fg.status} ${fg.stdout.slice(-300)} ${fg.stderr.slice(-300)}`);
     }
 
+    // ── [2026-10-16 사용자 지시] 작업자 명령을 거부하지 않는다(open 기본) — 프로젝트 블록 worker_permissions: strict 면 예전 허용 목록 ──
+    {
+      const fo = fake([impl('good')]);
+      const to = await go(checkRepo(), { run: fo });
+      const fs2 = fake([impl('good')]);
+      const ts = await go(checkRepo({ 'AGENTS.md': '```yaml\nworker_permissions: strict\n```\n' }), { run: fs2 });
+      R.check('[LP-95] 기본은 open(러너에 workerPermissions=open · 지시문은 "아무 명령이나") · worker_permissions: strict 면 strict(지시문은 "허용 목록 밖은 거부")',
+        to.status === 'done' && fo.calls[0].workerPermissions === 'open' && /any command/.test(fo.calls[0].prompt) && !/refused automatically/.test(fo.calls[0].prompt)
+        && ts.status === 'done' && fs2.calls[0].workerPermissions === 'strict' && /refused automatically/.test(fs2.calls[0].prompt),
+        `${fo.calls[0] && fo.calls[0].workerPermissions} ${fs2.calls[0] && fs2.calls[0].workerPermissions}`);
+    }
+
     // ── [2026-10-16 자동 이슈 #13] 저장소에서 찾은 검사가 새 worktree 에서 작업 전부터 시간 초과 — 작업과 무관하게 같은 실패 2회로 정체됐다.
     //    자동으로 찾은 검사가 기준선에서 시간 초과면 판정에서 빼고 알린다. 사용자가 준 검사(--check)는 빼지 않는다. ──
     {
@@ -493,7 +505,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
       R.check('[LP-72] 갈림길이 없었으면 보고에 없다고 분명히 적는다', /decision points: none/.test(tn.report), tn.report.slice(0, 500));
       const pr = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, language: 'Korean' });
       // [2026-10-16 실측] PowerShell 도구의 파이프(`… | Select-String`)는 어떤 허용 규칙으로도 통과하지 않았다(PowerShell(*) 만) — Bash 파이프는 통과.
-      const prc = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, runtime: 'claude' });
+      const prc = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, runtime: 'claude', worker_permissions: 'strict' });   // 허용 목록 모드의 안내
       R.check('[LP-74] 작업자 지시(Claude): 파이프 · 출력 거르기는 Bash 도구로 — PowerShell 파이프는 거부된다', /pipe/i.test(prc) && /Bash tool/.test(prc) && /PowerShell/.test(prc), prc.slice(-1500));
       R.check('[LP-73] 작업자 지시: 묻지 말고 스스로 고르고, 결과를 바꾼 갈림길만 DECISIONS.md 에(선택지 · 고른 것 · 이유 · 결과)', /DECISIONS\.md/.test(pr) && /never ask/.test(pr) && /options/.test(pr) && /why/.test(pr), pr.slice(0, 1500));
     }
@@ -536,7 +548,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
 
     // ── [2026-10-01 · Python 서비스 저장소] 무인 작업자가 인프라 단계(docker build · cp -r)를 못 해 BLOCKED — 작업·프로젝트 단위 허용 · blocked 재개 · 거부 보고 ──
     const DOCKER = 'Bash(docker build:*)';
-    const ra = checkRepo();
+    const ra = checkRepo({ 'AGENTS.md': '```yaml\nworker_permissions: strict\n```\n' });   // 허용 목록 모드(--allow 가 의미 있는 곳)
     const fa = fake([o => { impl('good')(o); }]);
     const al = await go(ra, { run: fa, allow: [DOCKER] });
     const ta = S.readTask(ra, al.id);
@@ -635,6 +647,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     //   10/01 에 더한 "거부되면 BLOCKED.md" 문구 때문에 모델이 테스트를 못 돌린다는 이유로 멈췄다(숨은 검사는 16/16 통과).
     const e51 = path.join(base, 'empty51'); fs.mkdirSync(e51); git(e51, ['init', '-q', '-b', 'main']); git(e51, ['config', 'user.name', 't']); git(e51, ['config', 'user.email', 't@example.invalid']);
     git(e51, ['commit', '-q', '--allow-empty', '-m', 'empty']);
+    fs.writeFileSync(path.join(e51, 'CLAUDE.md'), '```yaml\nworker_permissions: strict\n```\n');   // 허용 목록 모드의 안내를 본다
     const f51 = fake([o => { write(path.join(o.cwd, 'package.json'), '{"name":"x"}\n'); write(path.join(o.cwd, 'x.js'), '1\n'); }]);
     const g51 = await L.go({ ...quiet, root: e51, goal: 'make a cli', run: f51 });
     const a51 = f51.calls[0].allowCommands || [];
