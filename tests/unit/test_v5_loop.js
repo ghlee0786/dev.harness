@@ -454,6 +454,13 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
         `${fo.calls[0] && fo.calls[0].workerPermissions} ${fs2.calls[0] && fs2.calls[0].workerPermissions}`);
     }
 
+    // ── [2026-10-16 자동 보고 00b4667cbf35] "이번 작업에서 만들지 않은 파일은 지우지 말라" 때문에 앞 작업이 만든 파일의 이름을 바꾸지 못해
+    //    확장자를 남기고 빌드 설정에 예외를 넣었다. worktree 안의 삭제 · 이름 바꾸기는 하네스가 턴마다 커밋해 되돌릴 수 있다 — 막는 것은 worktree 밖. ──
+    {
+      const ap = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, runtime: 'claude' });
+      R.check('[LP-96] 작업자 지시: worktree 안의 삭제 · 이름 바꾸기는 목표가 필요로 하면 해도 된다 · 금지는 worktree 밖 삭제', !/did not create in this task/.test(ap) && /outside this worktree/.test(ap) && /(delet|renam)[^.]*inside this worktree/i.test(ap), ap.slice(0, 1200));
+    }
+
     // ── [2026-10-16 자동 이슈 #13] 저장소에서 찾은 검사가 새 worktree 에서 작업 전부터 시간 초과 — 작업과 무관하게 같은 실패 2회로 정체됐다.
     //    자동으로 찾은 검사가 기준선에서 시간 초과면 판정에서 빼고 알린다. 사용자가 준 검사(--check)는 빼지 않는다. ──
     {
