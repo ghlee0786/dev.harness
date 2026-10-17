@@ -127,6 +127,10 @@ const steps = list => { const calls = []; const run = async o => { const n = cal
       R.check('[DU-06] 돌려보내도 남으면 막지 않고(done · 정체 아님) 보고 맨 위 주의에 남긴다', t6.status === 'done' && calls6.length === 2 && /중복|duplicate/i.test(t6.report.split('\n').slice(0, 6).join('\n')), `${t6.status} ${calls6.length} ${t6.report.slice(0, 500)}`);
       const d7 = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n`, 'CLAUDE.md': '```yaml\ndup_check: off\n```\n' }); const calls7 = [];
       const t7 = await L.go({ ...quiet, root: d7, goal: 'add total2', run: async o => { calls7.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), FN.replace('function total', 'function total2')); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; } });
+      // [2026-10-17 적대적 검증] 커밋 전(추적되지 않은) 새 파일은 "더한 줄" 을 세지 못해 베낀 코드를 놓쳤다
+      const d8 = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n` }), b8 = git(d8, 'rev-parse', 'HEAD');
+      write(path.join(d8, 'src', '새 파일.js'), FN.replace('function total', 'function untracked').replace(/\n/g, '\r\n'));
+      R.check('[DU-08] 추적되지 않은 새 파일(한글 · 공백 이름 · CRLF)의 베낀 코드도 찾는다', Dup.find(d8, b8).length === 1, JSON.stringify(Dup.find(d8, b8)));
       R.check('[DU-07] dup_check: off 면 보지 않는다', t7.status === 'done' && calls7.length === 1, `${t7.status} ${calls7.length}`);
     }
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }

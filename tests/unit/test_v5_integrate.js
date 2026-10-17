@@ -429,6 +429,16 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     const killed = require('../../harness/lib/git').killProcsIn(holdDir);
     await new Promise(r => setTimeout(r, 500));
     R.check('[IN-26] 폴더를 붙잡은 프로세스를 찾아 끝낸다(이 프로세스 · 조상은 빼고)', killed.some(k => k.pid === holder.pid) && !S.pidAlive(holder.pid), JSON.stringify(killed));
+    // [2026-10-17 적대적 검증] 경로를 접두어로만 비교해 …/t-1 을 치우다 …/t-10(실제로는 <id> 와 옆 경로 <id>-2 의 살아 있는 작업)을 잡았다
+    {
+      const p1 = path.join(base, 'wt-pre', 't-1'), p10 = path.join(base, 'wt-pre', 't-1-2');
+      write(path.join(p10, 'sleep.js'), 'setTimeout(()=>{},60000)'); fs.mkdirSync(p1, { recursive: true });
+      const other = spawn(process.execPath, [path.join(p10, 'sleep.js')], { stdio: 'ignore', windowsHide: true });
+      await new Promise(r => setTimeout(r, 500));
+      const found = require('../../harness/lib/git').procsIn(p1);
+      try { process.kill(other.pid); } catch { /* 끝났다 */ }
+      R.check('[IN-26b] 프로세스 정리는 그 폴더만 — 이름이 접두어인 옆 폴더(<id> 대 <id>-2)의 프로세스는 잡지 않는다', !found.some(k => k.pid === other.pid), JSON.stringify(found));
+    }
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 임시 디렉터리 정리 실패는 결과와 무관 */ } }
   R.done();

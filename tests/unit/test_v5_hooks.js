@@ -422,6 +422,33 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
       R.check('[guard/worker] 작업자 모드: worktree 안 삭제 · 일반 명령은 통과', isAllow(wpre('rm -rf build')) && isAllow(wpre('rm a.txt')) && isAllow(wpre('node -v | head -1')) && isAllow(wpre('for i in 1 2; do echo $i; done')));
       R.check('[guard/worker] 대화형 모드(인자 없음)는 예전 그대로 — 저장소 밖 일반 폴더 삭제는 막지 않는다', isAllow(wpre(`rm -rf "${outside.replace(/\\/g, '/')}"`, 'Bash', [])));
     }
+    // ── [2026-10-17 적대적 검증] 작업자 모드 guard 우회 16가지 — 실제 worktree(메인 저장소 안)에서 ──
+    //    ① cd 로 메인 저장소에 들어가면 경계를 메인으로 다시 잡았다 ② 삭제를 명령 이름으로만 봤다(find -delete · mv · robocopy · 리다이렉션 ·
+    //    Set-Content · node/python 한 줄) ③ 풀 수 없는 변수는 마지막 조각이 구체적이면 통과 ④ docker 데몬 전체를 바꾸는 명령
+    {
+      const mainR = mkRepo('guard-adv-main', { 'src/a.js': 'a\n' });
+      const wtA = path.join(mainR, '.harness-worktrees', 't-20261017-000000-abcd');
+      git(mainR, 'worktree', 'add', '-q', '-b', 'harness/t-20261017-000000-abcd', wtA);
+      const userData = path.join(base, 'user-data-adv'); fs.mkdirSync(userData, { recursive: true }); fs.writeFileSync(path.join(userData, 'k.txt'), 'k');
+      const U = userData.replace(/\\/g, '/'), Uw = userData, MR = mainR.replace(/\\/g, '/'), MRw = mainR;
+      const G = require(path.join(HOOKS, 'guard.js'));
+      // 임시 폴더는 따로 둔다 — 이 테스트의 저장소 · 사용자 폴더가 시스템 임시 폴더 안에 있어 "임시 폴더 예외" 가 모두 통과시키지 않게(실제와 같게)
+      const advTmp = path.join(base, 'adv-tmp'); fs.mkdirSync(advTmp, { recursive: true });
+      const dec = (cmd, tool) => { const keep = ['TEMP', 'TMP', 'TMPDIR'].map(k => [k, process.env[k]]); for (const [k] of keep) process.env[k] = advTmp; try { return G.decide({ tool_name: tool, tool_input: { command: cmd }, cwd: wtA }, 'claude', { worker: true }); } finally { for (const [k, v] of keep) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } } };
+      const mustBlockW = [[`cd "${MR}" && rm -rf src`, 'Bash'], ['cd .. && cd .. && rm -rf src', 'Bash'], [`pushd "${MR}"; rm -rf src`, 'Bash'],
+        [`Set-Location "${MRw}"; Remove-Item -Recurse src`, 'PowerShell'], [`find "${U}" -delete`, 'Bash'], [`find "${U}" -type f -exec rm {} +`, 'Bash'],
+        [`mv "${U}" ./trash`, 'Bash'], [`Move-Item "${Uw}" .\\trash`, 'PowerShell'], [`node -e "require('fs').rmSync('${U}',{recursive:true})"`, 'Bash'],
+        [`python -c "import shutil; shutil.rmtree('${U}')"`, 'Bash'], ['rm -rf "$TMP/../user-data"', 'Bash'], ['rm -rf "$OUT_DIR"', 'Bash'],
+        [`robocopy empty "${Uw}" /MIR`, 'PowerShell'], [`echo x > "${U}/k.txt"`, 'Bash'], [`echo x>>${U}/k.txt`, 'Bash'], [`Set-Content -Path "${Uw}\\k.txt" -Value x`, 'PowerShell'],
+        ['docker rm -f $(docker ps -aq)', 'Bash'], ['docker system prune -af', 'Bash'], ['docker compose -p myapp down -v', 'Bash'], [`cd $SOMEWHERE && rm -rf data`, 'Bash']];
+      const blockedW = mustBlockW.map(([c, t]) => [c.replace(base.replace(/\\/g, '/'), '<T>').replace(base, '<T>'), !!dec(c, t)]);
+      R.check('[guard/worker-adv] 작업자 모드: 우회 20가지(cd 후 삭제 · find · mv · robocopy · 리다이렉션 · Set-Content · 한 줄 코드 · 변수 경로 · docker 전역)를 막는다', blockedW.every(x => x[1]), JSON.stringify(blockedW.filter(x => !x[1])));
+      const mustPassW = [['rm -rf build', 'Bash'], ['cd src && rm -f a.js', 'Bash'], ['find . -name "*.tmp" -delete', 'Bash'], ['mv a.js b.js', 'Bash'], ['echo x > out.log', 'Bash'],
+        ['npm test 2>&1 | tail -20', 'Bash'], ['dotnet build 2>&1 > build.log', 'Bash'], ['Set-Content -Path .\\out.txt -Value x', 'PowerShell'], ['docker compose up -d', 'Bash'], ['docker compose down -v', 'Bash'],
+        [`echo x > "${advTmp.replace(/\\/g, '/')}/scratch.txt"`, 'Bash'], ['rm -rf "$PWD/build"', 'Bash'], ['node -e "console.log(1)"', 'Bash'], ['cat a.js > /dev/null', 'Bash']];
+      const passedW = mustPassW.map(([c, t]) => [c, !dec(c, t)]);
+      R.check('[guard/worker-adv] 작업자 모드: worktree 안 · 임시 폴더 · 이 작업의 compose 는 그대로 통과', passedW.every(x => x[1]), JSON.stringify(passedW.filter(x => !x[1]).map(x => [x[0], String(dec(x[0], 'Bash')).slice(0, 80)])));
+    }
 
     R.check('[격리] 가짜 HOME 에 .claude · .codex 가 생기지 않았다', !fs.existsSync(path.join(home, '.claude')) && !fs.existsSync(path.join(home, '.codex')));
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
