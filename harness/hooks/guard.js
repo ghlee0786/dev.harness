@@ -526,7 +526,9 @@ const WRITE_CMDLETS = new Set(['set-content', 'sc', 'add-content', 'ac', 'clear-
 const COPY_MOVE = new Set(['cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'ren', 'rename-item', 'rni', 'xcopy']);
 const DOCKER_GLOBAL = /^(rm|stop|kill|rmi|restart|pause|prune|container|volume|network|image|system|builder)$/i;
 const valueOf = (args, names) => { const k = args.findIndex(a => names.test(a)); return k >= 0 && args[k + 1] != null ? args[k + 1] : null; };
-const positionals = args => { const out = []; for (let i = 0; i < args.length; i++) { const a = args[i]; if (/^-/.test(a) || (/^\/[A-Za-z]+$/.test(a) && a.length <= 6)) { if (/^-(path|literalpath|lp|destination|filepath|value|encoding|itemtype|name|filter|include|exclude)$/i.test(a)) i++; continue; } out.push(a); } return out; };
+// Windows 식 옵션(/Y · /MIR · /XD:…) — '/' 뒤에 영문자만 오고 다른 '/' 가 없다. POSIX 절대 경로(/tmp/x)를 옵션으로 버리지 않게.
+const WIN_OPT = /^\/[A-Za-z]+(:[^/]*)?$/;
+const positionals = args => { const out = []; for (let i = 0; i < args.length; i++) { const a = args[i]; if (/^-/.test(a) || (WIN_OPT.test(a) && a.length <= 6)) { if (/^-(path|literalpath|lp|destination|filepath|value|encoding|itemtype|name|filter|include|exclude)$/i.test(a)) i++; continue; } out.push(a); } return out; };
 function checkWorker(p, args, words0, mode, ctx) {
   // 리다이렉션: `> 파일` · `>>파일` · 붙여 쓴 `x>>/c/k.txt`
   for (let i = 0; i < words0.length; i++) {
@@ -549,7 +551,7 @@ function checkWorker(p, args, words0, mode, ctx) {
     for (const t of [...(dest ? [dest] : []), ...(moving ? srcs : [])]) { const r = workerTarget(t, mode, ctx, true); if (r) return r; }
   }
   if (p === 'robocopy') {
-    const pos = args.filter(a => !/^\//.test(a));
+    const pos = args.filter(a => !WIN_OPT.test(a));   // /MIR · /XD … 만 옵션 — POSIX 절대 경로(/tmp/…)는 경로다(CI 실측)
     const moving = args.some(a => /^\/(mov|move)$/i.test(a));
     for (const t of [pos[1], ...(moving ? [pos[0]] : [])].filter(Boolean)) { const r = workerTarget(t, mode, ctx, true); if (r) return r; }
   }
