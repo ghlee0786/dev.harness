@@ -302,6 +302,19 @@ fs.writeFileSync(process.env.DUMP,JSON.stringify(e));process.stdin.resume();proc
     R.check('[RN-12] (M8) 대조: 같은 push 가 워커 환경 없이는 성공한다(검사가 무의미하지 않다)', control === 0 && /refs\/heads\/main/.test(gitIn(bare, ['for-each-ref', '--format=%(refname)']).stdout), String(control));
     R.check('[RN-12] (M8) fetch 는 막지 않는다', gitIn(work, ['fetch', '-q', 'origin'], ce1).status === 0);
 
+    // ── [2026-10-17 자동 보고 caed67b9a2f1] 작업자가 worktree 의 compose 로 사용자의 실행 중 컨테이너를 다시 만들었다(프로젝트 이름이 메인과 같았다).
+    //    작업자 · 검사 프로세스에는 작업별 COMPOSE_PROJECT_NAME 을 준다(compose 에서 .env · name: 보다 앞선다). 메인 체크아웃에는 주지 않는다. ──
+    {
+      const wtc = path.join(base, 'iso', '.harness-worktrees', 't-20261017-000000-abcd');
+      fs.mkdirSync(wtc, { recursive: true });
+      const e1 = proc.noPushEnv({}, wtc), e2 = proc.noPushEnv({}, path.join(base, 'iso'));
+      const r3 = await require('../../harness/lib/checks').runCheck(wtc, ['node', '-e', 'console.log("P=" + process.env.COMPOSE_PROJECT_NAME)'], { timeoutMs: 20000 });
+      R.check('[RN-19] 작업자 · 검사 환경의 COMPOSE_PROJECT_NAME 은 작업별(harness-<id>) · 메인 체크아웃에는 없다',
+        e1.COMPOSE_PROJECT_NAME === 'harness-t-20261017-000000-abcd' && e2.COMPOSE_PROJECT_NAME === undefined && /P=harness-t-20261017-000000-abcd/.test(r3.output), `${e1.COMPOSE_PROJECT_NAME} ${e2.COMPOSE_PROJECT_NAME} ${r3.output}`);
+      const pr19 = require('../../harness/lib/prompts').taskPrompt({ id: 't-x', goal: 'g', checks: { commands: [] }, runtime: 'claude' });
+      R.check('[RN-19] 작업자 지시: 메인 체크아웃의 실행 중인 서비스 · 컨테이너는 건드리지 않는다', /running services|containers/i.test(pr19) && /main checkout/i.test(pr19), pr19.slice(0, 1500));
+    }
+
     // ── RN-18 워커 환경은 이 저장소의 ref 를 바꾸지 못한다 — 권한 규칙(경계 아님)을 `node -e` 로 우회해도 ──
     //   reference-transaction 훅(core.hooksPath 를 환경으로)이 prepared 단계에서 거부한다. 다른 저장소(테스트가 만드는 임시 저장소)는 그대로.
     const ID = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];

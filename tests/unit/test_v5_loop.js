@@ -454,6 +454,25 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
         `${fo.calls[0] && fo.calls[0].workerPermissions} ${fs2.calls[0] && fs2.calls[0].workerPermissions}`);
     }
 
+    // ── [2026-10-17 자동 보고 5d6643b86c24] Windows 작업자가 LF 파일을 CRLF 로 저장해 변경 규모가 몇 배로 부풀고 메인과 파일 전체가 충돌했다.
+    //    하네스가 커밋하기 전에, 원래 줄바꿈과 통째로 달라진 파일은 원래 줄바꿈으로 되돌린다(git 이 줄바꿈을 바꾸는 저장소는 그대로). ──
+    {
+      const LFTXT = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n') + '\n';
+      const re = checkRepo({ 'big.txt': LFTXT, 'win.txt': LFTXT.replace(/\n/g, '\r\n') });
+      const te = await go(re, { run: fake([o => { impl('good')(o); write(path.join(o.cwd, 'big.txt'), LFTXT.replace('line 5', 'line five').replace(/\n/g, '\r\n')); write(path.join(o.cwd, 'win.txt'), LFTXT.replace('line 7', 'line seven')); }]) });
+      const blob = f => spawnSync('git', ['show', `${te.branch}:${f}`], { cwd: re }).stdout;
+      const k = S.readTask(re, te.id);
+      R.check('[LP-97] 커밋 전 줄바꿈 복원: LF 파일을 CRLF 로 · CRLF 파일을 LF 로 통째로 바꿔도 원래 줄바꿈으로 커밋 · 실제 바꾼 줄만 변경 규모에',
+        te.status === 'done' && !blob('big.txt').includes(Buffer.from('\r\n')) && blob('big.txt').toString().includes('line five') && blob('win.txt').toString().split('\r\n').length > 40 && k.diff && k.diff.insertions <= 3,
+        `${te.status} ${JSON.stringify(k.diff)} big:${blob('big.txt').includes(Buffer.from('\r\n'))}`);
+    }
+    // ── [2026-10-17 자동 이슈 #17] 작업이 새 시험 파일을 더했는데 검사 명령이 그 프로젝트를 돌리지 않아 판정에서 빠졌다 — 시험 수가 그대로면 알린다 ──
+    {
+      const rt = checkRepo();
+      const tt = await go(rt, { run: fake([o => { impl('good')(o); write(path.join(o.cwd, 'tests', 'new.test.js'), 'test("x", () => {});\n'); }]) });
+      R.check('[LP-98] 새 시험 파일을 더했는데 검사의 시험 수(통과+실패)가 작업 전과 같으면 보고 맨 위 주의에 알린다', tt.status === 'done' && /new\.test\.js/.test(tt.report.split('\n').slice(0, 6).join('\n')) && /(시험 수|test count)/.test(tt.report), tt.report.slice(0, 700));
+    }
+
     // ── [2026-10-16 자동 보고 00b4667cbf35] "이번 작업에서 만들지 않은 파일은 지우지 말라" 때문에 앞 작업이 만든 파일의 이름을 바꾸지 못해
     //    확장자를 남기고 빌드 설정에 예외를 넣었다. worktree 안의 삭제 · 이름 바꾸기는 하네스가 턴마다 커밋해 되돌릴 수 있다 — 막는 것은 worktree 밖. ──
     {
