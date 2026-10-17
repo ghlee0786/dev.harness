@@ -39,7 +39,7 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | 격리 | 작업마다 worktree · 브랜치. 무인 작업자는 push 경로가 막히고 이 저장소의 브랜치 · 태그를 바꾸지 못한다(git `reference-transaction` 훅) |
 | git 안전 | 대화형 세션의 `git push` · `reset --hard` · `clean -f` · `rebase` · 직접 `merge` · `stash` · 별칭 · `python -c`/`node -e` 로 감싼 git 쓰기를 막는다 |
 | 판정 | 저장소 테스트의 종료 코드와 작업 전 기준선 비교(나빠지지 않음). 실패하면 **한 번 더 돌려** 불안정한 검사는 작업자에게 돌려보내지 않는다 |
-| 린트 · 중복 코드 | `lint_command` — 테스트 다음의 두 번째 결정적 검사(`{files}` 는 작업이 바꾼 파일만). 그리고 **중복 코드 검사**: 작업이 새로 쓴 코드가 있는 코드를 블록째(공백 빼고 8줄 이상) 베꼈으면 위치를 알려 한 번 돌려보낸다(그래도 남으면 막지 않고 보고) |
+| 린트(정책) | 아래 **린트 정책** — 하네스 내장 품질 규칙 9가지 + 프로젝트의 `lint_command` |
 | 작업자 권한 | 기본 `open` — 명령을 막지 않는다. 막는 것은 git 쓰기 · push(git 수준) · worktree 밖 삭제(guard)뿐. `worker_permissions: strict` 면 예전 허용 목록 |
 | 보고 | 요약 · 다음 할 일 · 주의 · 검사 결과 · **변경 규모(+추가/-삭제 줄 · 새 파일)** · 비용 · 시간 |
 | 끝까지 | 시작 때도 도중에도 묻지 않는다 — 결과를 바꾸는 갈림길은 지시에 맞고 바꾸기 쉬운 쪽을 골라 계속하고, 완성 뒤 보고에 **결정 분기점(분기점 · 고른 것 · 이유 · 결과)** 으로 정리한다. 같은 세션 이어 가기 · 막히면 BLOCKED.md · `resume --allow` 로 이어 감 |
@@ -59,6 +59,7 @@ check_timeout_min: 20                    # 검사 상한(기본 15분)
 rerun_failed: on                         # 실패한 검사 재실행(off 로 끈다)
 serial_checks: true                      # 검사를 프로젝트 단위로 하나씩(공유 시험 DB · 포트 — 기본은 동시)
 dup_check: on                            # 중복 코드 검사(off 로 끈다) · dup_min_lines: 8
+quality: on                              # 하네스 내장 품질 규칙(off 로 전부 끈다) · quality_off: ["todo", "unused"] 로 규칙별
 worker_permissions: open                 # 작업자 명령을 막지 않는다(strict: 예전 허용 목록)
 reply_language: "Korean"                 # 작업자의 기록 · 보고 언어(목표에 한글이 있으면 기본 Korean)
 worker_allow: ["Bash(docker build:*)"]   # strict 일 때 무인 작업자에게 더 허용할 명령(git 쓰기 · 셸은 거부)
@@ -68,6 +69,26 @@ transcribe_command: "whisper \"{in}\" --output_dir \"{outdir}\""   # 전사기(�
 bug_report: on                           # 하네스 보고 자동 발행(off 로 끈다)
 auto_update: on                          # 최신 릴리스 자동 갱신(off 로 끈다)
 ```
+
+## 린트 정책
+
+AI 가 흔히 남기는 군더더기를 종류별 규칙으로 잡는다. **작업이 새로 더한 줄만** 본다(기존 코드의 옛 흔적으로 막히지 않는다).
+
+| 규칙 | 잡는 것 | 고치는 방법(작업자에게 주는 지시) |
+|---|---|---|
+| 중복(`dup`) | 있는 코드를 블록째 베낌(공백 빼고 8줄 이상) | 있는 것을 부르거나 공통 함수로 빼고 사본을 지운다 |
+| 쓰이지 않는 새 정의(`unused`) | 새로 만든 함수 · 메서드 · 클래스를 어디서도(XAML · 설정 포함) 부르지 않음 | 지운다 — 외부에 공개하는 API 면 DECISIONS.md 에 적는다 |
+| 디버그 흔적(`debug`) | `console.log` · `debugger` · `breakpoint()` · `pdb.set_trace()` · `Debugger.Break()` | 지운다 |
+| 남긴 할 일(`todo`) | 새 `TODO` · `FIXME` · `XXX` · `HACK` | 지금 끝내거나, 범위 밖이면 DECISIONS.md 에 |
+| 주석 처리된 코드(`commented`) | 코드처럼 보이는 주석 3줄 이상(문서 주석은 제외) | 지운다(git 이 이력을 가진다) |
+| 검사 억누르기(`suppress`) | `eslint-disable` · `@ts-ignore` · `# noqa` · `# type: ignore` · `#pragma warning disable` · `SuppressMessage` · `NoWarn` | 경고의 원인을 고친다 |
+| 테스트 약화(`test-weaken`) | `.skip` · `.only` · `xit` · `@pytest.mark.skip` · `[Ignore]` · `Skip=` · `assert True` | 테스트를 통과시킨다 |
+| 하드코딩(`hardcoded`) | 개인 경로(`C:\Users\…` · `/home/…`) · 비밀 키 모양(`ghp_` · `AKIA` · `sk-` · 개인 키) | 설정 · 환경 변수 · 저장소 상대 경로 |
+| 형식만 바뀐 파일(`format-only`) | 공백 · 들여쓰기만 바뀐 파일(범위 밖 재정렬) | 되돌린다 |
+
+- **처리**: 테스트(와 `lint_command`)가 통과한 뒤, 걸린 것을 **한 메시지로 모아 작업자에게 한 번만** 돌려보낸다. 고치지 않고 남겨도 막지 않고 보고서 맨 위 `주의:` 에 규칙별로 남긴다 — 멈춤을 늘리지 않는다. 의도한 것이면 작업자가 DECISIONS.md 에 이유를 적는다.
+- **언어별 린터**: `lint_command`(예: `ruff check {files}` · `npx eslint {files}` · `dotnet format … --include {files}`)는 그대로 돈다 — `{files}` 면 바꾼 파일만 보고 실패하면 막는다. `{files}` 가 없고 작업 전부터 빨간 저장소 전체 린트는 보고만 한다.
+- **끄기**: `quality: off`(전부) · `quality_off: ["todo", "unused"]`(규칙별) · `dup_check: off`(중복).
 
 ## 하네스 보고 — 자동 이슈
 

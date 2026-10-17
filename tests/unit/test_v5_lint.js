@@ -125,13 +125,68 @@ const steps = list => { const calls = []; const run = async o => { const n = cal
       const run6 = async o => { calls6.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), `${FN.replace('function total', 'function total2')}module.exports = { total2 };\n`); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; };
       const t6 = await L.go({ ...quiet, root: d6, goal: 'add total2', run: run6 });
       R.check('[DU-06] 돌려보내도 남으면 막지 않고(done · 정체 아님) 보고 맨 위 주의에 남긴다', t6.status === 'done' && calls6.length === 2 && /중복|duplicate/i.test(t6.report.split('\n').slice(0, 6).join('\n')), `${t6.status} ${calls6.length} ${t6.report.slice(0, 500)}`);
-      const d7 = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n`, 'CLAUDE.md': '```yaml\ndup_check: off\n```\n' }); const calls7 = [];
+      const d7 = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n`, 'CLAUDE.md': '```yaml\ndup_check: off\nquality: off\n```\n' }); const calls7 = [];   // 품질 규칙(쓰이지 않는 새 정의)도 끈다 — 중복만 보는 시나리오
       const t7 = await L.go({ ...quiet, root: d7, goal: 'add total2', run: async o => { calls7.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), FN.replace('function total', 'function total2')); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; } });
       // [2026-10-17 적대적 검증] 커밋 전(추적되지 않은) 새 파일은 "더한 줄" 을 세지 못해 베낀 코드를 놓쳤다
       const d8 = repo(null, { 'src/a.js': `${FN}module.exports = { total };\n` }), b8 = git(d8, 'rev-parse', 'HEAD');
       write(path.join(d8, 'src', '새 파일.js'), FN.replace('function total', 'function untracked').replace(/\n/g, '\r\n'));
       R.check('[DU-08] 추적되지 않은 새 파일(한글 · 공백 이름 · CRLF)의 베낀 코드도 찾는다', Dup.find(d8, b8).length === 1, JSON.stringify(Dup.find(d8, b8)));
       R.check('[DU-07] dup_check: off 면 보지 않는다', t7.status === 'done' && calls7.length === 1, `${t7.status} ${calls7.length}`);
+    }
+
+    // ── [2026-10-17 사용자 지시] 린트를 세분화해 정책으로 — 하네스 내장 품질 규칙(작업이 새로 더한 줄만 · 한 번 돌려보내고 남으면 보고) ──
+    const Q = require('../../harness/lib/quality');
+    const qrepo = files => { const d = repo(null, files); return { d, b: git(d, 'rev-parse', 'HEAD') }; };
+    const rulesOf = fs2 => [...new Set(fs2.map(f => f.rule))].sort().join(',');
+    {
+      const { d, b } = qrepo({ 'src/app.js': 'export function used() { return 1; }\n', 'src/main.js': 'import { used } from "./app";\nused();\n', 'tests/a.test.js': 'test("a", () => { expect(1).toBe(1); });\n', 'src/svc.py': 'def run():\n    return 1\n', 'src/Svc.cs': 'class Svc {\n  public int Run() { return 1; }\n}\n', 'src/hard.txt': 'ok\n' });
+      write(path.join(d, 'src/app.js'), [
+        'export function used() { return 1; }',
+        'export function helperNobodyCalls(x) { return x * 2; }',   // 쓰이지 않는 새 정의
+        'console.log("debug here");',                                  // 디버그 흔적
+        'debugger;',
+        '// TODO: handle errors later',                                // 남긴 할 일
+        '// eslint-disable-next-line no-unused-vars',                  // 검사 억누르기
+        '// const old = compute(a, b);',                               // 주석 처리된 코드 3줄
+        '// if (old > 0) { run(old); }',
+        '// return old;',
+        'const home = "C:\\\\Users\\\\gh\\\\data";',                   // 하드코딩된 개인 경로
+        'const token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";',   // 비밀 모양
+        ''].join('\n'));
+      write(path.join(d, 'tests/a.test.js'), 'test.skip("a", () => { expect(1).toBe(1); });\nit.only("b", () => {});\n');   // 테스트 약화
+      write(path.join(d, 'src/svc.py'), 'def run():\n    breakpoint()\n    return 1  # type: ignore\n');
+      write(path.join(d, 'src/Svc.cs'), 'class Svc {\n#pragma warning disable CS0168\n  public int Run() { return 1; }\n  private void NeverCalled() { }\n}\n');
+      write(path.join(d, 'src/main.js'), 'import { used } from "./app";\n  used();\n');   // 들여쓰기만 바뀜
+      const f = Q.find(d, b);
+      const R1 = rulesOf(f);
+      R.check('[QL-01] 규칙별로 잡는다: 쓰이지 않는 새 정의 · 디버그 흔적 · 남긴 할 일 · 주석 처리된 코드 · 검사 억누르기 · 테스트 약화 · 하드코딩 · 형식만 바뀐 파일',
+        ['unused', 'debug', 'todo', 'commented', 'suppress', 'test-weaken', 'hardcoded', 'format-only'].every(r => R1.split(',').includes(r)), `${R1} | ${JSON.stringify(f.map(x => [x.rule, x.file, x.line, x.text]).slice(0, 20))}`);
+      R.check('[QL-01] 위치(파일:줄)와 걸린 줄을 알려 준다', f.every(x => x.file && (x.line > 0 || x.rule === 'format-only')), JSON.stringify(f.slice(0, 3)));
+      R.check('[QL-01] 쓰이지 않는 새 정의: 부르지 않는 함수 · 메서드만(이미 쓰이는 것 · 테스트는 아니다)', f.filter(x => x.rule === 'unused').map(x => x.text).sort().join(',') === 'NeverCalled,helperNobodyCalls', JSON.stringify(f.filter(x => x.rule === 'unused')));
+    }
+    {
+      // 잡으면 안 되는 것: 기존 코드의 옛 흔적(새로 더한 줄이 아님) · 쓰이는 새 함수 · 문서 파일의 TODO · 끈 규칙
+      const { d, b } = qrepo({ 'src/old.js': 'console.log("legacy");\n// TODO legacy\n', 'README.md': 'x\n' });
+      write(path.join(d, 'src/old.js'), 'console.log("legacy");\n// TODO legacy\nexport function add(a, b) { return a + b; }\n');
+      write(path.join(d, 'src/use.js'), 'import { add } from "./old";\nexport const total = add(1, 2);\n');
+      write(path.join(d, 'README.md'), 'x\nTODO: write docs\n');
+      const f = Q.find(d, b);
+      R.check('[QL-02] 기존 코드의 옛 흔적 · 쓰이는 새 함수 · 문서 파일은 잡지 않는다', f.length === 0, JSON.stringify(f));
+      write(path.join(d, 'src/use.js'), 'import { add } from "./old";\nexport const total = add(1, 2);\nconsole.log(total);\n');
+      R.check('[QL-03] 규칙을 끌 수 있다(quality_off: ["debug"])', Q.find(d, b, { off: ['debug'] }).length === 0 && Q.find(d, b).some(x => x.rule === 'debug'), JSON.stringify(Q.find(d, b)));
+    }
+    {
+      // 루프: 품질 규칙 · 중복은 한 번에 모아 한 번만 돌려보낸다 → 고치면 done · 남겨도 done(정체 아님) · 보고에 규칙별로
+      const d9 = dupRepo(); const calls9 = [];
+      const run9 = async o => { calls9.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), calls9.length === 1 ? `${FN.replace('function total', 'function total2')}console.log("x");\ndebugger;\nmodule.exports = { total2 };\n` : 'const { total } = require("./a");\nmodule.exports = { total2: total };\n'); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; };
+      const t9 = await L.go({ ...quiet, root: d9, goal: 'add total2', run: run9 });
+      R.check('[QL-04] 루프: 중복 · 디버그 흔적을 한 메시지에 모아 한 번만 돌려보내고, 고치면 done · 보고에 품질 검사 결과', t9.status === 'done' && calls9.length === 2 && /duplicat/i.test(calls9[1]) && /debug/i.test(calls9[1]) && /(quality|품질)/i.test(t9.report), `${t9.status} ${calls9.length} ${t9.report.slice(0, 600)}`);
+      const d10 = repo(null); const calls10 = [];
+      const t10 = await L.go({ ...quiet, root: d10, goal: 'x', run: async o => { calls10.push(o.prompt); write(path.join(o.cwd, 'src/c.js'), 'export const v = 1;\nconsole.log(v);\n'); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; } });
+      R.check('[QL-05] 돌려보내도 남으면 done(정체 아님) · 보고 맨 위 주의에 규칙별로', t10.status === 'done' && calls10.length === 2 && /디버그|debug/i.test(t10.report.split('\n').slice(0, 6).join('\n')), `${t10.status} ${calls10.length} ${t10.report.slice(0, 500)}`);
+      const d11 = repo(null, { 'CLAUDE.md': '```yaml\nquality: off\n```\n' }); const calls11 = [];
+      await L.go({ ...quiet, root: d11, goal: 'x', run: async o => { calls11.push(o.prompt); write(path.join(o.cwd, 'src/c.js'), 'console.log(1);\n'); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; } });
+      R.check('[QL-06] quality: off 면 내장 규칙을 돌리지 않는다', calls11.length === 1, String(calls11.length));
     }
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }
