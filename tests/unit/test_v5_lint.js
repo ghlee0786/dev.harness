@@ -76,6 +76,17 @@ const steps = list => { const calls = []; const run = async o => { const n = cal
     // LT-08 — {files} 치환: 바뀐 파일이 없으면 린트를 돌리지 않는다 · 경로에 공백이 있어도 한 인자
     R.check('[LT-08] {files} 치환 — 공백 경로는 따옴표 · 빈 목록이면 null', K.lintArgv('node lint.js {files}', ['a b.js', 'c.js']).join('|') === 'node lint.js "a b.js" c.js' && K.lintArgv('node lint.js {files}', []) === null,
       JSON.stringify([K.lintArgv('node lint.js {files}', ['a b.js', 'c.js']), K.lintArgv('node lint.js {files}', [])]));
+    // [2026-10-18 자동 이슈 #18] Windows: --check '.venv/Scripts/python -m pytest' 처럼 실행 파일 경로가 슬래시면 cmd 가 '/Scripts' 를 스위치로 읽어 매번 실패했다
+    {
+      const dc = path.join(base, 'slash-check'); fs.mkdirSync(path.join(dc, 'tools', 'bin'), { recursive: true });
+      const isWin = process.platform === 'win32';
+      const script = path.join(dc, 'tools', 'bin', isWin ? 'ok.cmd' : 'ok.cmd');
+      fs.writeFileSync(script, isWin ? '@echo # pass 1\r\n@echo # fail 0\r\n' : '#!/bin/sh\necho "# pass 1"\necho "# fail 0"\n'); if (!isWin) fs.chmodSync(script, 0o755);
+      const r1 = await K.runCheck(dc, ['tools/bin/ok.cmd --flag'], { timeoutMs: 20000 });
+      const r2 = await K.runCheck(dc, ['tools/bin/ok.cmd', '--flag'], { timeoutMs: 20000 });
+      const r3 = await K.runCheck(dc, ['echo start && tools/bin/ok.cmd'], { timeoutMs: 20000 });
+      R.check('[LT-09] 실행 파일 경로를 슬래시로 적어도(셸 문자열 · argv · && 뒤) 돈다 — Windows cmd 가 /경로 를 스위치로 읽지 않게', r1.ok && r2.ok && r3.ok && /pass 1/.test(r1.output), JSON.stringify([r1.ok, r1.exit_code, String(r1.output).slice(0, 120), r2.ok, r3.ok]));
+    }
 
     // ── [2026-10-15 자동 이슈 #4] 같은 시험 DB 를 쓰는 작업 둘이 동시에 검사하면 서로 멈췄다 — serial_checks: true 면 프로젝트 단위로 하나씩 ──
     const rs = repo(null);
