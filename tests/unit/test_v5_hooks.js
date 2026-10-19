@@ -454,7 +454,8 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
       const decAt = (cmd, tool, cwd) => { const keep = ['TEMP', 'TMP', 'TMPDIR'].map(k => [k, process.env[k]]); for (const [k] of keep) process.env[k] = advTmp; try { return G.decide({ tool_name: tool, tool_input: { command: cmd }, cwd: cwd || wtA }, 'claude', { worker: true }); } finally { for (const [k, v] of keep) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } } };
       const fp = [[`W=${W2}/sub; mkdir -p $W && rm -rf "$W/old"`, 'Bash'], [`$root = "${wtA}\\obj\\h3d"; New-Item -ItemType Directory -Force "$root\\x" | Out-Null`, 'PowerShell'],
         [`$wt='${wtA}'; Remove-Item -Recurse -Force "$wt\\bin"`, 'PowerShell'], ['dotnet test x.sln 2>&1 | Out-File -Encoding utf8 "$env:TEMP\\t.log"', 'PowerShell'],
-        ['dotnet test x.sln > /tmp/t.log 2>&1', 'Bash'], ['rm -rf /tmp/basechk && mkdir /tmp/basechk', 'Bash'],
+        // Git Bash 의 /tmp(= 사용자 임시 폴더)는 Windows 에서만 — POSIX 의 /tmp 는 실제 경로라 임시 폴더를 따로 돌린 이 테스트에서는 밖이다
+        ...(process.platform === 'win32' ? [['dotnet test x.sln > /tmp/t.log 2>&1', 'Bash'], ['rm -rf /tmp/basechk && mkdir /tmp/basechk', 'Bash']] : []),
         ['docker images --format x', 'Bash'], ['docker network ls', 'Bash'], ['docker ps -a', 'Bash'], ['docker volume ls', 'Bash']];
       const fpRes = fp.map(([c, t]) => [c.slice(0, 70), !decAt(c, t)]);
       const nested = !decAt('rm -rf ../build && rm -f ../a.txt', 'Bash', path.join(wtA, 'nested'));

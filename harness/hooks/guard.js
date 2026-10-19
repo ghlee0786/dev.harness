@@ -547,12 +547,15 @@ function secretReason(what, files) {
 //   allowTmp: 임시 폴더(os.tmpdir · TEMP · TMP · TMPDIR)는 쓰고 지워도 된다.
 const tmpRoots = () => [os.tmpdir(), process.env.TEMP, process.env.TMP, process.env.TMPDIR].filter(Boolean).map(t => C.real(path.resolve(t)));
 function workerTarget(t0, mode, ctx, allowTmp) {
-  let t = String(mode === 'ps' && !C.IS_WIN ? t0.replace(/\\/g, '/') : t0).trim().replace(/^["']|["']$/g, '');
+  let t = String(t0).trim().replace(/^["']|["']$/g, '');
   if (!t || /^(\/dev\/null|nul|\$null)$/i.test(t)) return null;
   t = t.replace(/^\$\{?PWD\}?(?=$|[\\/])/i, () => ctx.cwd);
   const lv = eachLoopValue(t, ctx, s => workerTarget(s, mode, ctx, allowTmp)); if (lv !== undefined) return lv;
-  t = expandVars(t, ctx);
-  if (/^\/tmp(\/|$)/.test(t) && !/(^|[\\/])\.\.([\\/]|$)/.test(t)) return null;   // Git Bash · POSIX 의 /tmp 는 임시 폴더다(Windows 에서 C:\tmp 로 풀면 틀린다)
+  t = expandVars(t, ctx);   // 변수 값의 \ 도 함께 바꾸도록 푼 뒤에 — [2026-10-19 CI macOS]
+  if (mode === 'ps' && !C.IS_WIN) t = t.replace(/\\/g, '/');
+  // Git Bash 의 /tmp 는 사용자 임시 폴더다(C:\tmp 가 아니다) — 임시 폴더로 바꿔 같은 검사를 거친다(메인 저장소 예외 · ../ 포함).
+  //   POSIX 의 /tmp 는 실제 경로 그대로 본다. [2026-10-19 CI Linux] 그대로 통과시키니 /tmp 아래의 모든 것이 통과했다.
+  if (C.IS_WIN && /^\/tmp(\/|$)/.test(t)) t = path.join(os.tmpdir(), t.slice(4));
   const relative = !path.isAbsolute(expandHome(t)) && !/^[a-zA-Z]:/.test(t) && !/^\//.test(t);
   if (relative && ctx.cwdUnknown) return `${REASONS.workerUnresolved} (대상: ${t})`;
   const abs = resolveTarget(ctx.cwd, t);
