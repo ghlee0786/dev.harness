@@ -182,7 +182,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     // ── 한도 → interrupted → resume 이 같은 세션을 이어 간다 ───────────
     const r9 = checkRepo();
     const f9 = fake([o => { impl('half')(o); return { is_error: true, error_kind: 'quota', error_message: "You've hit your usage limit", session_id: 'S-quota' }; }]);
-    const intr = await go(r9, { run: f9 });
+    const intr = await go(r9, { run: f9, quotaWait: false });   // 한도 → interrupted 경로(quota_wait: off) — 기다리는 기본 동작은 test_v5_quota
     const t9 = S.readTask(r9, intr.id);
     R.check('[LP-10] 사용량 한도 → interrupted(이유에 원문) · 작업은 커밋됨', intr.status === 'interrupted' && /usage limit/.test(intr.reason) && t9.session_id === 'S-quota' && git(r9, ['show', `${t9.branch}:impl.txt`]) === 'half', `${intr.status} ${intr.reason}`);
     const f9b = fake([impl('good')]);
@@ -195,7 +195,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     // ── 주인 생존 거부 · 죽은 주인은 빼앗는다 ──────────────────────────
     const r10 = checkRepo();
     const f10 = fake([() => ({ is_error: true, error_kind: 'quota', error_message: 'usage limit', session_id: 'S10' })]);
-    const i10 = await go(r10, { run: f10 });
+    const i10 = await go(r10, { run: f10, quotaWait: false });
     const live = spawn(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], { stdio: 'ignore', windowsHide: true });
     await wait(100);
     write(path.join(S.lockDir(r10, `task-${i10.id}`), 'owner.json'), JSON.stringify({ pid: live.pid, host: os.hostname(), at: new Date().toISOString(), token: 'z' }));

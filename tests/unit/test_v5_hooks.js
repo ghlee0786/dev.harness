@@ -487,6 +487,24 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
       const mon = { pass: ['until grep -q "exit=" out.log; do sleep 2; done', 'git status --short'].map(c => !decAt(c, 'Monitor')),
         block: ['git commit -am x', 'git add -A', 'git push', `rm -rf "${U}"`, 'git checkout main'].map(c => !!decAt(c, 'Monitor')) };
       R.check('[guard/worker-monitor] Monitor: 기다리기 · git 읽기는 통과, git 쓰기 · worktree 밖 삭제는 막는다', mon.pass.every(Boolean) && mon.block.every(Boolean), JSON.stringify(mon));
+      // [PRD R3] 쓰기 소유권 — HARNESS_OWNS 가 있으면 worktree 안이라도 그 밖은 쓰기 · 삭제 · 이동을 막는다(셸 · Edit/Write 도구 모두)
+      const keepOwns = process.env.HARNESS_OWNS;
+      process.env.HARNESS_OWNS = JSON.stringify(['src/billing/**', 'tests/billing/test_x.py', 'docs']);
+      const W3 = wtA.replace(/\\/g, '/');
+      const tool = (name, file) => { const keep = ['TEMP', 'TMP', 'TMPDIR'].map(k => [k, process.env[k]]); for (const [k] of keep) process.env[k] = advTmp; try { return G.decide({ tool_name: name, tool_input: { file_path: file }, cwd: wtA }, 'claude', { worker: true }); } finally { for (const [k, v] of keep) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } } };
+      const ownPass = [decAt('echo x > src/billing/a.py', 'Bash'), decAt('rm -f src/billing/old.py', 'Bash'), decAt('mv src/billing/a.py src/billing/b.py', 'Bash'),
+        decAt(`echo x > "${advTmp.replace(/\\/g, '/')}/run.log"`, 'Bash'), tool('Edit', `${W3}/src/billing/new.py`), tool('Write', `${W3}/docs/guide/readme.md`),
+        tool('Write', `${W3}/.harness/t-20261020-000000-aaaa/PLAN.md`), tool('Write', `${W3}/tests/billing/test_x.py`), decAt('Set-Content -Path .\\src\\billing\\c.py -Value x', 'PowerShell')];
+      const ownBlock = [decAt('echo x > src/other/a.py', 'Bash'), decAt('rm -rf src', 'Bash'), decAt('mv src/billing/a.py src/shared/a.py', 'Bash'), decAt('rm -rf .', 'Bash'),
+        tool('Edit', `${W3}/src/shared/util.py`), tool('Write', `${W3}/tests/billing/test_y.py`), tool('MultiEdit', `${W3}/docsx/a.md`), decAt('Set-Content -Path .\\src\\shared\\c.py -Value x', 'PowerShell')];
+      if (keepOwns === undefined) delete process.env.HARNESS_OWNS; else process.env.HARNESS_OWNS = keepOwns;
+      R.check('[guard/worker-owns] 소유 경로 안 · 하네스 기록 · 임시 폴더는 쓴다(셸 · Edit/Write · PowerShell · 폴더 접두 · 정확한 파일)', ownPass.every(x => !x), JSON.stringify(ownPass.map(x => x && String(x).slice(-80))));
+      R.check('[guard/worker-owns] 소유 경로 밖(다른 폴더 · 상위 폴더 삭제 · 밖으로 이동 · worktree 전체 · 이름만 비슷한 폴더)은 막고 이유에 소유 경로를 적는다', ownBlock.every(x => x && /소유/.test(x)), JSON.stringify(ownBlock.map(x => x && String(x).slice(-60))));
+      const noOwns = [tool('Edit', `${W3}/src/anything.py`), tool('Write', `${U}/k.txt`)];
+      R.check('[guard/worker-owns] 소유 경로가 없으면 worktree 안은 그대로 쓰고 · Edit/Write 도 worktree 밖은 막는다 · 대화형(작업자 아님)은 Edit 를 보지 않는다',
+        !noOwns[0] && !!noOwns[1] && !G.decide({ tool_name: 'Write', tool_input: { file_path: `${U}/k.txt` }, cwd: wtA }, 'claude', {}), JSON.stringify(noOwns));
+      const gm = (g, p) => G.globRe(g).test(p);
+      R.check('[guard/worker-owns] glob: ** 는 아무 깊이(0 포함) · * 는 한 단계 · 글자만이면 그 파일이나 폴더 아래', gm('src/**', 'src/a/b.py') && gm('src/**/x.py', 'src/x.py') && gm('src/**/x.py', 'src/a/b/x.py') && gm('src/*.py', 'src/a.py') && !gm('src/*.py', 'src/a/b.py') && gm('docs', 'docs/a/b.md') && !gm('docs', 'docsx/a.md') && !gm('tests/billing/test_x.py', 'tests/billing/test_y.py'));
       R.check('[guard/worker-fp] 변수를 풀어도 worktree 밖이면 막는다 · docker 의 rm/prune 은 막는다', stillBlock.every(([c, t]) => !!decAt(c, t)), JSON.stringify(stillBlock.map(([c, t]) => [c.slice(0, 50), !!decAt(c, t)])));
     }
 

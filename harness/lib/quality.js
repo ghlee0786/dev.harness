@@ -9,27 +9,13 @@ const G = require('./git'), D = require('./dup');
 
 const RULES = ['unused', 'debug', 'todo', 'commented', 'suppress', 'test-weaken', 'hardcoded', 'format-only'];
 const CONF_EXT = /\.(csproj|vbproj|fsproj|props|targets|json|ya?ml|toml|ini|cfg|config|xml|xaml)$/i;
-const JS = /\.(js|mjs|cjs|ts|tsx|jsx|vue|svelte)$/i, PY = /\.py$/i, CS = /\.(cs|java|kt|vb|fs|scala|swift|dart)$/i;
-
-const DEBUG = [[JS, /\bconsole\.(log|debug|trace|dir)\s*\(|^\s*debugger\s*;?\s*$/], [PY, /\bbreakpoint\(\)|\b(i?pdb)\.set_trace\(/], [CS, /\bDebugger\.(Break|Launch)\(\)/]];
+// 언어별 패턴(디버그 흔적 · 테스트 약화 · 안 쓰는 정의 · 주석)은 언어 팩(langs.js)에 — 여기는 언어와 무관한 것만(PRD R5)
+const Langs = require('./langs');
 const TODO = /(\/\/|#|\/\*|\*|--|<!--)\s*.*\b(TODO|FIXME|XXX|HACK)\b/;
-const SUPPRESS = /eslint-disable|@ts-ignore|@ts-nocheck|@ts-expect-error|#\s*noqa\b|#\s*type:\s*ignore|pylint:\s*disable|#\s*nosec\b|#pragma\s+warning\s+disable|SuppressMessage|NOSONAR|@SuppressWarnings|rubocop:disable|<NoWarn>|TreatWarningsAsErrors>\s*false/i;
-const WEAKEN = /\b(it|test|describe|context|suite)\.(skip|only)\s*\(|\b(xit|xdescribe|xtest|fit|fdescribe)\s*\(|@pytest\.mark\.(skip|xfail)|\bpytest\.skip\(|\[Ignore\b|\bSkip\s*=\s*"|@Disabled\b|@Ignore\b|^\s*assert\s+True\s*$|expect\(true\)\.toBe\(true\)|Assert\.(True|IsTrue)\(\s*true\s*\)/;
+const SUPPRESS = /eslint-disable|@ts-ignore|@ts-nocheck|@ts-expect-error|#\s*noqa\b|#\s*type:\s*ignore|pylint:\s*disable|#\s*nosec\b|#pragma\s+warning\s+disable|SuppressMessage|NOSONAR|@SuppressWarnings|rubocop:disable|<NoWarn>|TreatWarningsAsErrors>\s*false|\/\/\s*nolint\b|#!?\[allow\(|\bNOLINT(NEXTLINE)?\b|#pragma\s+(GCC|clang)\s+diagnostic\s+ignored/i;
 const HARD_PATH = /\b[A-Za-z]:(\\\\|\\|\/)Users(\\\\|\\|\/)[^\\/\s"'`]+|\/home\/[a-z_][\w.-]*\/|\/Users\/[A-Za-z][\w.-]*\//;
 const SECRET = /\b(ghp|gho|ghs|ghu|github_pat)_[A-Za-z0-9_]{20,}|\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bxox[baprs]-[A-Za-z0-9-]{10,}/;
-// 주석 표시는 언어별로 — C# · JS 의 #if · #region 은 전처리 지시문이다. 문서 주석(/// · /** · *)은 코드가 아니다. [2026-10-17 실측 오탐]
-const COMMENT_BY = [
-  [/\.(js|mjs|cjs|ts|tsx|jsx|vue|svelte|cs|java|kt|go|rs|swift|c|cc|cpp|h|hpp|scala|dart|php|fs)$/i, /^\s*\/\/(?!\/)\s?(.*)$/],
-  [/\.(py|rb|sh|ps1|ya?ml|toml)$/i, /^\s*#(?![!#])\s?(.*)$/], [/\.(sql|lua)$/i, /^\s*--\s?(.*)$/], [/\.vb$/i, /^\s*'\s?(.*)$/]];
-const commentOf = (f, t) => { const m = COMMENT_BY.find(([ext]) => ext.test(f)); const c = m && m[1].exec(t); return c ? c[1] : null; };
 const CODEY = /(\w+\s*\(.*\)\s*;?\s*$|[;{}]\s*$|^\s*(return|if|for|while|const|let|var|def|class|import|from|await|throw)\b|\w\s*[+\-*/]?=\s*\S)/;
-const DEFS = [
-  [PY, /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/], [PY, /^\s*class\s+([A-Za-z_]\w*)/],
-  [JS, /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/],
-  [JS, /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/],
-  [JS, /^\s*(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][\w$]*)/],
-  [CS, /^\s*(?:(?:public|private|protected|internal|static|async|virtual|sealed|abstract|partial|final|readonly|unsafe|extern|new)\s+)+(?!class\b|interface\b|struct\b|record\b|enum\b|override\b)[\w<>[\],.?]+(?:\s*<[^>]*>)?\s+([A-Za-z_]\w*)\s*\([^;]*$/],
-];
 const NOT_UNUSED = /^(main|Main|__\w+__|setUp|tearDown|setup|teardown|constructor|render|default)$|^(test|Test)/;
 // [2026-10-19 현장 오탐] 데코레이터 · 어트리뷰트(@router.get · [HttpGet] · @Get())가 붙은 정의는 프레임워크가 이름 없이 부른다.
 //   여러 줄 데코레이터(@router.get(\n "/x",\n))도 — 정의 위로, 같은 들여쓰기의 @ · [ 줄이 나오면 붙은 것. 빈 줄 · 같은 들여쓰기의 다른 문장에서 멈춘다.
@@ -72,14 +58,14 @@ function find(wt, base, o) {
       if (!added.has(n)) { flushRun(); continue; }
       const hit = (rule, text) => { if (on(rule)) out.push({ rule, file: f, line: n, text: (text || t.trim()).slice(0, 120) }); };
       if (!isTest && SUPPRESS.test(t) && !reasoned(t)) hit('suppress');   // 테스트의 억누르기(# noqa: E402 · @ts-expect-error)는 대개 의도다
-      if (isTest) { if (WEAKEN.test(t)) hit('test-weaken'); continue; }
+      if (isTest) { if (Langs.WEAKEN.test(t)) hit('test-weaken'); continue; }
       if (!isCode) continue;
-      if (DEBUG.some(([ext, re]) => ext.test(f) && re.test(t))) hit('debug');
+      if (Langs.debugFor(f).some(re => re.test(t))) hit('debug');
       if (TODO.test(t)) hit('todo');
       if (HARD_PATH.test(t) || SECRET.test(t)) hit('hardcoded', t.trim().replace(SECRET, m => `${m.slice(0, 6)}…`));
-      const c = commentOf(f, t);
+      const c = Langs.commentOf(f, t);
       if (c != null && CODEY.test(c) && !/<\/?\w+[^>]*>/.test(c) && !TODO.test(t) && !SUPPRESS.test(t)) run.push(n); else flushRun();
-      if (on('unused')) for (const [ext, re] of DEFS) { if (!ext.test(f)) continue; const m = re.exec(t); if (m && !NOT_UNUSED.test(m[1]) && !/\boverride\b/.test(t) && !decorated(lines, n)) { defs.push({ file: f, line: n, name: m[1], text: t }); break; } }
+      if (on('unused')) for (const re of Langs.defsFor(f)) { const m = re.exec(t); if (m && !NOT_UNUSED.test(m[1]) && !/\boverride\b/.test(t) && !decorated(lines, n)) { defs.push({ file: f, line: n, name: m[1], text: t }); break; } }
     }
     flushRun();
   }

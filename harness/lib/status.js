@@ -160,9 +160,18 @@ function gc(o) {
   const removed = [], kept = [];
   const known = new Set();
   const lockHeldWhy = name => `lock ${name} is held by a live owner (an accept/cancel/restore/resume is in progress) — skipped`;
+  const released = [];
   for (const t of S.listTasks(root)) {
     const tp = S.taskPaths(root, t.id);
     known.add(norm(tp.wt));
+    // [PRD R1] 끝난 작업의 git 밖 자원(볼륨 · 이미지 · 임시 폴더 · 프로젝트 정리 명령)을 한 번 회수한다. 산 주인이 있는 작업 · 잠긴 작업은 건너뛴다.
+    if (!(t.status === 'running' && S.ownerAlive(t.owner)) && !(t.resources && t.resources.release_at) && !S.lockLive(root, `task-${t.id}`)) {
+      try {
+        const r = require('./resources').release(root, t);
+        S.writeTask(root, t);
+        if (Object.keys(r.docker.removed).length || r.residue.length || r.cleanup || (r.tmp && r.tmp.removed)) released.push({ id: t.id, docker: r.docker.removed, tmp_removed: !!(r.tmp && r.tmp.removed), cleanup: r.cleanup && r.cleanup.ok, residue: r.residue });
+      } catch { /* 회수 실패는 다음 gc 에서 다시 */ }
+    }
     if (!fs.existsSync(tp.wt)) continue;
     if (t.status === 'running' && S.ownerAlive(t.owner)) { kept.push({ id: t.id, worktree: tp.wt, why: 'task is running' }); continue; }
     // 지우는 동안 task-<id> 잠금을 잡는다 — 잡을 수 없으면(산 주인) 통합이 이 worktree 를 쓰는 중이다.
@@ -212,11 +221,13 @@ function gc(o) {
   } finally { if (mh) mh.release(); }
   const locks = S.removeDeadLocks(root);
   G.git(root, ['worktree', 'prune'], { allowFail: true });
-  return { root, removed, kept, locks_removed: locks };
+  return { root, removed, kept, released, locks_removed: locks };
 }
 function formatGc(g) {
   return [`gc: ${g.root}`, `removed worktrees: ${g.removed.length ? g.removed.map(x => x.id || x.worktree).join(', ') : 'none'}`,
-    ...g.kept.map(k => `kept ${k.id || k.worktree}: ${k.why}`), `dead locks released: ${g.locks_removed.length ? g.locks_removed.join(', ') : 'none'}`].join('\n');
+    ...g.kept.map(k => `kept ${k.id || k.worktree}: ${k.why}`),
+    ...(g.released || []).map(r => `released ${r.id}: ${[r.tmp_removed ? 'temp folder' : '', ...Object.entries(r.docker || {}).map(([k, v]) => `${v} docker ${k}`), r.cleanup != null ? `cleanup_command ${r.cleanup ? 'ok' : 'FAILED'}` : ''].filter(Boolean).join(' · ') || 'nothing'}${r.residue.length ? ` — LEFT: ${r.residue.join(', ')}` : ''}`),
+    `dead locks released: ${g.locks_removed.length ? g.locks_removed.join(', ') : 'none'}`].join('\n');
 }
 
 module.exports = { status, formatStatus, gc, formatGc, taskFiles, ignoredChanged, ignoredWhy, removeIfSafe };

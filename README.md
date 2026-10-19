@@ -23,9 +23,11 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | 명령 | 하는 일 |
 |---|---|
 | `go "<요청>"` | 자기 worktree 에서 끝까지 실행하고 보고서를 낸다 — `--goal-file` · `--check "<명령>"` · `--attach <파일>` · `--doc <문서>` · `--allow "<규칙>"` · `--runtime claude\|codex` · `--detach`(셸과 분리해 띄우고 id 를 바로 돌려준다) |
+| `factory "<요청>"` | **다중 에이전트 공장** — 계획 에이전트가 요청을 카드(쓰기 소유 경로 · 의존 · 계약)로 나누고, 카드마다 하네스 작업이 병렬로 돌고, 통합 브랜치 `harness/factory/<id>` 에 하나씩 합친다(매번 검사 · 실패하면 revert 하고 다시). 그다음 **검증 라인**: 시험 차터를 여러 시험 에이전트에게 나눠 주고, 다른 에이전트가 독립 재현한 결함만 수정 카드로. `--jobs N` · `--budget-usd N` · `--test-agents N` · `--waves N` · `--no-verify` · `factory status\|wait\|stop\|accept <id>` |
 | `wait <id>` | 작업이 끝날 때까지 기다려 보고를 낸다. `go` · `resume` 은 늘 셸과 분리된 프로세스에서 돌므로 부른 셸이 시간 상한으로 죽어도 작업은 계속되고, `wait` 로 보고를 다시 받는다 |
 | `status` · `stop <id>` · `resume <id>` | 현황(누적 비용 · 겹침 · 주인 없는 변경 · 손상된 작업 기록) · 멈춤(진행분 커밋) · 이어 가기 |
 | `note <id> ("<지시>" \| --file <파일>)` · `resume <id> --note …` | 도는 · 끝난 작업에 요구를 덧붙인다 — 도는 작업은 다음 턴에(끝나려던 참이면 한 턴 더), 멈춘 · 끝난 작업은 resume 때 전달 |
+| `go … --owns "<glob>"` | **쓰기 소유권** — 그 작업이 바꿀 수 있는 경로만(반복 가능). guard 가 밖의 쓰기 · 삭제 · 이동을 셸과 Edit/Write 모두에서 막는다 — 여러 작업이 한 저장소를 동시에 고쳐도 엉키지 않게 |
 | `accept <id>` · `cancel <id>` · `restore <id>` | 받아들이기(`--no-ff` 병합 · 사용자가 말한 뒤에만 · 테스트와 린트를 다시 본다) · 취소(revert) · 되살리기 |
 | `push [<remote>] [<branch>]` · `push [<remote>] --tag <이름>` | 빨리감기 push · 릴리스 태그 push(덮어쓰지 않는다) — 사용자가 명시한 뒤에만 |
 | `doc new <prd\|coordination\|design> "<제목>"` | 요청할 때만 만드는 관리 문서 |
@@ -46,6 +48,11 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | 멀티모달 | `--attach` — 이미지 · PDF 는 그대로, 영상은 장면 이미지 + 전사, 음성은 전사(ffmpeg · faster-whisper 가 있으면 자동) |
 | 의존 | `.worktreeinclude`(git 밖 파일) · 서브모듈 · 저장소 밖 형제 폴더(`worktree_links`) |
 | 언어 | 한국어로 물으면 대화형 답이 영어로 끝나지 않게 되돌리고, 한국어 작업은 보고 전체가 한국어 |
+| 다중 에이전트 | `factory` — 계획(프로그램이 형식 · 의존 순환 · 소유 겹침을 검사하고 겹치면 직렬화) → 병렬 제작(카드 = 작업 · 소유 경로) → 합류 대기열(main 은 손대지 않음 · 통합 브랜치는 늘 초록) → 검증 라인(차터 · 묶기 · 독립 재현 · 발견율로 파도) → 받아들이기는 사용자가 말한 뒤 |
+| 쓰레기 0 | **자원 장부** — 작업마다 전용 임시 폴더(TEMP · TMP · TMPDIR) · 데이터 구역(`HARNESS_DATA_NS`) · compose 이름(`harness-<id>`). 끝나면 컨테이너 · 임시 폴더를, accept · cancel · gc 때 볼륨 · 이미지 · `cleanup_command` 까지 회수 · 남은 것은 보고 |
+| 중복 0 · 맥락 | **작업 장부** — 새 작업을 이전 작업과 비교(언어 무관 유사도)해, 같은 일이 이미 끝났으면 "처음부터 다시 하지 말고 확인 · 검증 뒤 남은 것만", 비슷하면 그 결정 · 결과 · 바꾼 파일을 맥락으로 준다 |
+| 언어 중립 | **언어 팩** — node · python · dotnet · go · rust · java(maven · gradle) · c/c++(cmake+ctest · meson · make): 감지 · 테스트 명령 · 요약 · 쓰레기 패턴이 같은 방식으로 |
+| 한도 | 모델 사용량 한도(세션 · 주간)에 걸리면 리셋 시각까지 기다렸다 같은 세션으로 이어 간다(기다린 시간은 벽시계 상한에서 뺀다 · 최대 6시간) |
 | 단순성 | 작업자는 목표에 필요한 최소한만 — 요청 밖 기능 · 한 번 쓰는 추상화 금지, 표준 라이브러리 우선, 바꾼 줄은 모두 요청으로 이어짐 |
 
 ## 프로젝트 설정
@@ -68,6 +75,8 @@ outside_git_ok: ["data/*.db"]            # worktree 를 붙잡지 않는 런타�
 transcribe_command: "whisper \"{in}\" --output_dir \"{outdir}\""   # 전사기(없으면 faster-whisper · whisper 자동)
 bug_report: on                           # 하네스 보고 자동 발행(off 로 끈다)
 auto_update: on                          # 최신 릴리스 자동 갱신(off 로 끈다)
+cleanup_command: "python scripts/drop_test_data.py"   # 작업을 치울 때 git 밖 시험 데이터 정리(HARNESS_DATA_NS · HARNESS_TASK_ID 를 받는다)
+quota_wait: on                           # 사용량 한도면 리셋까지 기다렸다 이어 감(off: 바로 interrupted) · quota_wait_max_min: 360
 ```
 
 ## 린트 정책

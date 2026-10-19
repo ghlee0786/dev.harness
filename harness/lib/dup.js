@@ -7,7 +7,7 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const G = require('./git');
 
 const CODE_EXT = /\.(js|mjs|cjs|ts|tsx|jsx|py|cs|vb|fs|java|kt|go|rs|rb|php|swift|c|cc|cpp|h|hpp|vue|svelte|scala|dart|lua|ps1|sh)$/i;
-const SKIP = /(^|\/)(node_modules|dist|build|bin|obj|out|vendor|\.harness|\.harness-worktrees|\.git|migrations?)\/|\.min\.|\.(designer|g|generated)\.[a-z]+$|-lock\.|\.lock$/i;
+const SKIP = /(^|\/)(node_modules|dist|build|bin|obj|out|vendor|\.harness|\.harness-worktrees|\.harness-build|\.git|migrations?)\/|\.min\.|\.(designer|g|generated)\.[a-z]+$|-lock\.|\.lock$/i;
 const TEST = /(^|\/)(tests?|__tests__|specs?)\/|(^|\/)test_[^/]+\.py$|[._-](test|spec)s?\.[A-Za-z0-9]+$|(^|\/)[^/]*Tests?\.(cs|fs|vb|java|kt)$/i;
 const MAX_FILES = 6000, MAX_BYTES = 512 * 1024;
 

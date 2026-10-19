@@ -205,6 +205,7 @@ function addWorktree(root, wt, o) {
   const P = S.paths(root);
   return S.withLockSync(root, 'worktree', () => {
     ensureExclude(P.excludeFile, '.harness-worktrees/');   // 잠금 안에서 — 동시 작업이 같은 파일을 겹쳐 쓰지 않게
+    ensureExclude(P.excludeFile, '.harness-build/');   // 언어 팩의 빌드 폴더(C/C++ cmake · meson) — 매 턴 커밋에 빌드 산출물이 섞이지 않게
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     let args;
     if (opt.detach) args = ['worktree', 'add', '-q', '--detach', wt, opt.base || 'HEAD'];

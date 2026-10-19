@@ -71,8 +71,15 @@ async function go(o) {
   const task = S.newTask({ id, goal, runtime, model: o.model || (runtime === 'claude' ? DEFAULTS.model : null), effort: o.effort || null,
     base_branch: o.base ? o.base.replace(/^refs\/heads\//, '') : G.currentBranch(here), base_commit: baseCommit, branch: P.branch, worktree: P.wt,
     owner: S.ownerRecord(), caps: capsFrom(o), docs, allow, language });
+  // [PRD R3] 쓰기 소유 경로 — worktree 기준 상대 glob 만(절대 경로 · .. 은 받지 않는다)
+  const owns = (o.owns || []).map(g => String(g).trim().replace(/\\/g, '/')).filter(Boolean);
+  for (const g of owns) if (/^([a-zA-Z]:|\/)|(^|\/)\.\.(\/|$)/.test(g)) { lock.release(); throw Object.assign(new Error(`--owns must be a path inside the repository (relative, no ..): ${g}`), { code: 'USAGE' }); }
+  if (owns.length) task.owns = owns;
+  if (o.factory) task.factory = o.factory;   // 공장 카드(실행 id · 카드 id) — 작업 장부가 같은 실행의 형제 카드를 "이전 작업" 으로 보지 않게
+  // [PRD R2] 작업 장부 — 이 저장소의 이전 작업 중 같은 · 비슷한 목표(지시문에 맥락으로 · 보고에 주의로)
+  try { task.related = require('./worklog').related(root, task); } catch { task.related = []; }
   S.writeTask(root, task);
-  S.log(root, id, { event: 'created', goal, base_branch: task.base_branch, base_commit: baseCommit, docs, allow });
+  S.log(root, id, { event: 'created', goal, base_branch: task.base_branch, base_commit: baseCommit, docs, allow, related: task.related.length ? task.related : undefined });
   if (allow.length && runtime === 'codex') log(`[harness] ${id} — note: allow rules (${allow.join(', ')}) have no effect on the Codex runtime; its sandbox governs what runs`);
   const c = { root, P, task, run, lock, log, t0, spentBefore: 0, o };
   try {
@@ -350,7 +357,7 @@ function takeNotes(c) {
 
 async function loop(c, kind) {
   const { root, P, task, log } = c;
-  const deadline = c.t0 + task.caps.wall_min * 60000 - c.spentBefore;
+  let deadline = c.t0 + task.caps.wall_min * 60000 - c.spentBefore;   // 사용량 한도를 기다린 시간만큼 늦춘다
   const saveWall = () => { task.spent.wall_ms = c.spentBefore + (Date.now() - c.t0); };
   c.allow = K.allowCommands(P.wt, task.checks);
   const hb = S.startHeartbeat(root, task.id, c.lock, c.o.heartbeatMs || 30000, task);
@@ -381,7 +388,21 @@ async function loop(c, kind) {
     S.writeTask(root, task);
 
     const ek = r.is_error ? (r.error_kind || 'crash') : null;
-    if (ek === 'quota') return finish(c, 'interrupted', `usage limit: ${String(r.error_message || r.final_text || '').slice(0, 300)}`);
+    if (ek === 'quota') {
+      // [2026-10-20] 한도에 걸리면 리셋 시각까지 기다렸다 같은 메시지로 이어 간다(무인 작업 · 공장) — 기다린 시간은 벽시계 상한에서 뺀다
+      const text = `${r.error_message || ''} ${r.final_text || ''}`;
+      const here = c.o.root || root, qOff = /^(off|false|no|0)$/i.test(String(K.yamlString(here, 'quota_wait') || ''));
+      const q = c.o.quotaWait === false ? null : require('./quota').plan(task, text, { off: qOff, maxMin: c.o.quotaWaitMaxMin != null ? c.o.quotaWaitMaxMin : K.yamlNumber(here, 'quota_wait_max_min') });
+      if (!q) return finish(c, 'interrupted', `usage limit: ${text.trim().slice(0, 300)}`);
+      task.quota_waits = (task.quota_waits || 0) + 1; task.quota_waited_ms = (task.quota_waited_ms || 0) + q.waitMs;
+      if (!q.parsed) task.quota_unparsed = (task.quota_unparsed || 0) + 1;
+      S.writeTask(root, task);
+      S.log(root, task.id, { event: 'quota_wait', until: new Date(q.until).toISOString(), wait_ms: q.waitMs, parsed: q.parsed, message: text.trim().slice(0, 200) });
+      log(`[harness] ${task.id} — usage limit reached; waiting ${Math.round(q.waitMs / 60000)} min (until ${new Date(q.until).toLocaleTimeString()}) then continuing the same session`);
+      await (c.o.sleep || (ms => new Promise(res => setTimeout(res, ms))))(q.waitMs);
+      deadline += q.waitMs;
+      continue;
+    }
     if (ek === 'auth') return finish(c, 'interrupted', `authentication failed: ${String(r.error_message || '').slice(0, 300)}`);
     if (ek === 'sandbox') return finish(c, 'error', String(r.error_message || 'sandbox refused tool execution').slice(0, 500));
     if (ek === 'timeout' || ek === 'aborted') return finish(c, 'capped', `wall clock ${task.caps.wall_min} min reached (the session was stopped)`);
@@ -550,6 +571,11 @@ function finish(c, status, reason) {
       if (!rm.ok) task.worktree_kept = rm.error; else delete task.worktree_alt;
     }
   }
+  // [PRD R1] 이 작업이 띄운 컨테이너 · 네트워크를 내리고 임시 폴더를 지운다(볼륨 · 이미지 · 프로젝트 정리 명령은 accept · cancel · gc 때)
+  try {
+    const r = require('./resources').onTaskEnd(root, task);
+    if (Object.keys(r.docker.removed).length || r.residue.length || (r.tmp && r.tmp.removed)) S.log(root, task.id, { event: 'resources_end', docker: r.docker.removed, tmp_removed: !!(r.tmp && r.tmp.removed), residue: r.residue });
+  } catch (e) { task.resources = { ...(task.resources || {}), error: String(e.message).slice(0, 200) }; }
   if (task.owner) task.owner.heartbeat_at = S.nowIso();
   S.writeTask(root, task);
   S.log(root, task.id, { event: 'end', status, reason, cost_usd: task.spent.cost_usd, wall_ms: task.spent.wall_ms, worktree_kept: task.worktree_kept || null });
@@ -645,6 +671,8 @@ function summaryKo(task) {
   if ((task.attachments || []).length) out.push(`첨부: ${task.attachments.length}개 — ${task.attachments.map(a => `${a.name}(${KIND_KO[a.kind] || a.kind}${a.frames.length && a.kind === 'video' ? ` · 장면 ${a.frames.length}장` : ''}${a.transcript ? ' · 전사' : ''})`).join(', ')}`);
   out.push(`다음: ${next}`);
   const warn = [];
+  const relWarn = require('./worklog').reportWarning(task, true);
+  if (relWarn) warn.push(relWarn);
   if ((task.checks_modified || []).length) warn.push(`작업이 검사 정의를 고쳤다(${task.checks_modified.join(', ')}) — 통과를 그대로 믿지 마세요`);
   // [2026-10-17 자동 이슈 #17] 새 시험을 더했는데 검사 명령이 그 프로젝트를 돌리지 않아 판정에서 빠졌다 — 시험 수가 그대로면 알린다.
   const runCount = x => x ? Number(x.pass || 0) + Number(x.fail || 0) : null;
@@ -787,6 +815,9 @@ function report(task, P) {
   if (ch.dup && ch.dup.on !== false) lines.push(`duplicate code: ${(ch.dup.last || []).length ? (ch.dup.last || []).map(b => `${b.file}:${b.start}-${b.end} (${b.lines} lines) duplicates ${b.other}`).join(' · ') : 'none'}${ch.dup.sent ? ' (sent back to the worker once)' : ''}`);
   lines.push(`changed files: ${task.files_changed == null ? '?' : task.files_changed}`);
   if (task.diff) lines.push(`diff: +${task.diff.insertions} -${task.diff.deletions} lines · ${task.diff.added_files} new files`);
+  if ((task.related || []).length) lines.push(`related earlier work (given to the worker as context): ${task.related.map(r => `${r.id} ${r.status} ${Math.round(r.score * 100)}%${r.kind === 'same' ? ' SAME GOAL' : ''}`).join(' · ')}`);
+  const relWarn = require('./worklog').reportWarning(task, false);
+  if (relWarn) lines.push(`WARNING: ${relWarn}`);
   if ((ch.flaky || []).length) lines.push(`flaky checks (failed, then passed on rerun — not sent back to the worker): ${ch.flaky.join(' ; ')}`);
   lines.push(`existing test files modified: ${(task.tests_modified || []).length ? task.tests_modified.join(', ') : 'none'}`);
   if ((task.secrets_excluded || []).length) lines.push(`secret files NOT committed (left in the worktree; never merged): ${listOf(task.secrets_excluded, 20)}`);
@@ -821,4 +852,4 @@ function report(task, P) {
   return lines.join('\n');
 }
 
-module.exports = { addNote, pendingNotes, go, resume, finish, result, report, capsFrom, isTestFile, getRun, DEFAULTS, RESUMABLE };
+module.exports = { addNote, pendingNotes, allNotes, go, resume, finish, result, report, capsFrom, isTestFile, getRun, DEFAULTS, RESUMABLE };

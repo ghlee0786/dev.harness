@@ -6,7 +6,6 @@ const { spawn, spawnSync } = require('node:child_process');
 const CHECK_TIMEOUT_MS = 15 * 60 * 1000, CAP = 256 * 1024;
 const IS_WIN = process.platform === 'win32';
 const DEFAULT_ALLOW = ['node', 'npm', 'npx', 'pnpm', 'yarn', 'python', 'py', 'pytest', 'pip', 'dotnet', 'go', 'cargo', 'make', 'tsc', 'jest', 'vitest'];
-const NPM_DEFAULT_TEST = /no test specified/i;
 
 // ── 명령 문자열 → argv ────────────────────────────────────────────────
 // 셸 연산자(&& || | ; > <)가 있으면 셸 문자열 하나로 둔다(argv 길이 1 · 실행은 셸로).
@@ -103,19 +102,10 @@ function yamlList(root, name) {
   }
   return null;
 }
-const exists = (root, rel) => fs.existsSync(path.join(root, rel));
 const readText = (root, rel) => { try { return fs.readFileSync(path.join(root, rel), 'utf8'); } catch { return ''; } };
-const listRoot = root => { try { return fs.readdirSync(root); } catch { return []; } };
 
-function repoKinds(root) {
-  const kinds = new Set(), names = listRoot(root);
-  if (exists(root, 'package.json')) kinds.add('node');
-  if (exists(root, 'pyproject.toml') || exists(root, 'pytest.ini') || exists(root, 'setup.py') || exists(root, 'requirements.txt') || exists(root, 'tox.ini')) kinds.add('python');
-  if (names.some(n => /\.(sln|csproj|fsproj|vbproj)$/i.test(n))) kinds.add('dotnet');
-  if (exists(root, 'go.mod')) kinds.add('go');
-  if (exists(root, 'Cargo.toml')) kinds.add('rust');
-  return [...kinds];
-}
+// 저장소 종류 — 언어 팩(langs.js)이 정한다(PRD R5 · 언어 중립)
+function repoKinds(root) { return require('./langs').detect(root); }
 
 // 사용자 검사가 있으면 그것, 없으면 저장소에서 발견, 없으면 none.
 // projectRoot: 프로젝트 블록(test_command)을 먼저 읽을 곳 — 부른 체크아웃. 지시 파일이 커밋 전이거나 git 밖(CLAUDE.md)이면 worktree 에는 옛 판이 있다
@@ -129,24 +119,14 @@ function discover(root, userChecks, projectRoot) {
       if (v) return { source: 'detected', commands: [splitCommand(v)], from: f };
     }
   }
-  if (exists(root, 'package.json')) {
-    let pkg = null; try { pkg = JSON.parse(readText(root, 'package.json')); } catch { /* 깨진 package.json */ }
-    const t = pkg && pkg.scripts && pkg.scripts.test;
-    if (typeof t === 'string' && t.trim() && !NPM_DEFAULT_TEST.test(t)) return { source: 'detected', commands: [['npm', 'test']], from: 'package.json' };
-  }
-  if (exists(root, 'pytest.ini') || /^\s*\[tool\.pytest/m.test(readText(root, 'pyproject.toml')) || /^\s*\[(tool:)?pytest\]/m.test(readText(root, 'setup.cfg') + '\n' + readText(root, 'tox.ini'))) {
-    return { source: 'detected', commands: [['python', '-m', 'pytest']], from: 'pytest' };
-  }
-  const names = listRoot(root);
-  const sln = names.find(n => /\.sln$/i.test(n)), proj = names.find(n => /\.(csproj|fsproj|vbproj)$/i.test(n));
-  if (sln || proj) return { source: 'detected', commands: [['dotnet', 'test']], from: sln || proj };
-  if (exists(root, 'go.mod')) return { source: 'detected', commands: [['go', 'test', './...']], from: 'go.mod' };
-  if (exists(root, 'Cargo.toml')) return { source: 'detected', commands: [['cargo', 'test']], from: 'Cargo.toml' };
+  // 언어 팩 순서대로 처음 찾은 테스트 명령(node · python · dotnet · go · rust · java · c/c++)
+  const t = require('./langs').testCommand(root);
+  if (t) return { source: 'detected', commands: t.commands, from: t.from };
   return { source: 'none', commands: [] };
 }
 
 // 워커가 실행해도 되는 프로그램: 검사 명령의 argv[0] + 저장소 종류.
-const KIND_ALLOW = { node: ['node', 'npm', 'npx'], python: ['python', 'py', 'pytest'], dotnet: ['dotnet'], go: ['go'], rust: ['cargo'] };
+const KIND_ALLOW = new Proxy({}, { get: (_, k) => require('./langs').allowFor([String(k)]) });   // 언어 팩의 허용 프로그램
 function programName(argv) {
   const first = isShellString(argv) ? splitCommand(argv[0].split(SHELL_OPS)[0])[0] : argv[0];
   if (!first) return null;
@@ -257,6 +237,8 @@ function parseSummary(text) {
   if (mtp) return { found: true, pass: Number(mtp[2]), fail: Number(mtp[1]) };
   const js = [...s.matchAll(/^\s*Tests:\s+(.*)$/gm)].pop();
   if (js && /\b(passed|failed)\b/.test(js[1])) { const n = w => { const m = new RegExp(`(\\d+) ${w}`).exec(js[1]); return m ? Number(m[1]) : 0; }; return { found: true, pass: n('passed'), fail: n('failed') }; }
+  const lg = require('./langs').parseSummary(s);   // cargo · go · ctest · maven(언어 팩)
+  if (lg) return lg;
   return { found: false, pass: 0, fail: 0 };
 }
 
@@ -408,6 +390,6 @@ function failureExcerpt(judged) {
     `### \`${r.command}\` — exit ${r.exit_code == null ? 'none' : r.exit_code}${r.timed_out ? ' (timed out)' : ''}${r.found ? ` · ${r.pass} pass / ${r.fail} fail` : ''}\n\`\`\`\n${clip(r.output, 1500, 2500).trim()}\n\`\`\``).join('\n\n');
 }
 
-module.exports = { lintArgv, yamlNumber, yamlString, yamlList, yamlListOf,DEFAULT_ALLOW, NEVER_ALLOW, CHECK_TIMEOUT_MS, splitCommand, display, isShellString, discover, repoKinds, allowCommands, programName, parseSummary,
+module.exports = { lintArgv, yamlNumber, yamlString, yamlList, yamlListOf, spawnSpec, DEFAULT_ALLOW, NEVER_ALLOW, CHECK_TIMEOUT_MS, splitCommand, display, isShellString, discover, repoKinds, allowCommands, programName, parseSummary,
   runCheck, runAll, runJudged, summarize, brief, judge, worseThan, signature, firstAssertion, failureExcerpt, clip, killTree, childEnv,
   definitions, commandsForJudge, checksModified, isNpmTest, npmTestScript, yamlTestCommandOf };

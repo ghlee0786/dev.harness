@@ -174,7 +174,8 @@ function prog(word) {
 // 명령 문자열 전체를 본다. 첫 번째 차단 사유를 돌려주거나 null.
 //   문법은 하나만 쓴다(도구가 정한다). 두 문법으로 겹쳐 읽으면 한쪽이 다른 쪽의 데이터(heredoc 본문 등)를
 //   명령으로 오독해 오탐한다 — 실측: bash `$(cat <<'EOF' … (git push) … EOF)` 를 PowerShell 로 읽으면 걸린다.
-function analyze(command, opts) {
+// 분석 문맥 — 셸 명령(analyze)과 파일 쓰기 도구(Edit · Write) 검사가 같은 경계를 쓴다
+function ctxFor(opts) {
   const cwd = opts.cwd || process.cwd();
   // 작업자 모드의 경계는 처음 cwd 의 worktree 로 고정한다 — [2026-10-17 적대적 검증] `cd <메인 저장소> && rm -rf src` 에서
   //   경계를 cd 뒤의 저장소(메인)로 다시 잡아 메인의 소스 삭제가 "안쪽" 으로 판정됐다.
@@ -186,6 +187,11 @@ function analyze(command, opts) {
   // 메인 저장소(공통 .git 의 부모) — 임시 폴더 안에 있어도 그 안은 임시 폴더 예외를 받지 않는다
   const mainRoot = opts.mainRoot !== undefined ? opts.mainRoot : wtm ? wtm[1] : (info0 && path.basename(info0.common).toLowerCase() === '.git' ? path.dirname(info0.common) : null);
   const ctx = { cwd, root: undefined, depth: opts.depth || 0, worker: !!opts.worker, wtRoot, mainRoot, cwdUnknown: !!opts.cwdUnknown, vars: opts.vars || {}, loops: opts.loops || {}, gitReadOnly: !!opts.gitReadOnly };
+  return ctx;
+}
+
+function analyze(command, opts) {
+  const ctx = ctxFor(opts);
   // 지금 폴더를 돌려주는 치환($(pwd) · (Resolve-Path .).Path · (Get-Location).Path · $PWD.Path)은 $PWD 와 같다 — 그때의 cwd 로 푼다
   if (opts.worker) command = String(command).replace(/\$\(\s*pwd\s*\)|`pwd`|\$\(\s*\(\s*(?:Resolve-Path\s+\.|Get-Location)\s*\)\.Path\s*\)|\(\s*(?:Resolve-Path\s+\.|Get-Location)\s*\)\.Path|\$\(\s*Get-Location\s*\)|\$PWD\.Path/gi, '$PWD');
   return analyzeString(command, opts.mode || 'bash', ctx);
@@ -331,6 +337,7 @@ const WHOLE_TREE = new Set(['.', './', '.\\', ':/', ':/.', ':/*', '*', './*', '.
 const REASONS = {
   workerUnresolved: '하네스 작업자는 어디인지 풀 수 없는 경로(변수 · 명령 치환 · 위치를 모르는 cd 뒤의 상대 경로)를 지우거나 쓸 수 없습니다. worktree 안의 구체적인 경로로 적으세요.',
   dockerGlobal: '하네스 작업자는 docker 데몬 전체의 컨테이너 · 이미지 · 볼륨 · 네트워크를 지우거나 멈출 수 없습니다(사용자가 쓰는 서비스일 수 있다). 이 작업의 compose 프로젝트만 docker compose 로 다루세요.',
+  workerOwns: '이 작업의 쓰기 소유 경로 밖입니다 — 여러 작업자가 같은 저장소를 동시에 고칠 때 엉키지 않게, 이 작업은 소유 경로 안의 파일만 바꿀 수 있습니다(.harness/<id>/ 와 $TEMP 는 됩니다). 다른 곳이 바뀌어야 하면 DECISIONS.md 에 무엇을 왜 바꿔야 하는지 적으세요.',
   workerGit: '하네스 작업자는 git -C · --git-dir · --work-tree · stash · config 를 읽기로만 쓸 수 있습니다(status · log · diff · show · archive · stash list/show · config --get) — git 상태는 하네스만 바꿉니다.',
   dockerProject: '하네스 작업자는 compose 프로젝트 이름(-p · --project-name)을 바꿀 수 없습니다 — 하네스가 이 작업만의 COMPOSE_PROJECT_NAME 을 줬습니다(메인 체크아웃의 실행 중 컨테이너와 섞이지 않게).',
   outsideWorker: '하네스 작업자는 자기 worktree 밖의 파일 · 폴더를 지우거나 바꿀 수 없습니다(임시 폴더는 된다). worktree 안에서 하세요 — 꼭 필요하면 BLOCKED.md 에 무엇을 왜 해야 하는지 적으세요.',
@@ -563,11 +570,48 @@ function workerTarget(t0, mode, ctx, allowTmp) {
   const root = ctx.wtRoot || repoRootOf(ctx.cwd, ctx);
   if (!root) return null;
   const norm = C.real(abs);
-  if (C.samePath(norm, root) || isAncestor(root, norm)) return null;
+  if (C.samePath(norm, root) || isAncestor(root, norm)) return ownsCheck(root, norm, t, ctx);
   const inMain = ctx.mainRoot && (C.samePath(norm, C.real(ctx.mainRoot)) || isAncestor(C.real(ctx.mainRoot), norm));
   if (allowTmp && !inMain && tmpRoots().some(r => C.samePath(norm, r) || isAncestor(r, norm))) return null;
   return `${REASONS.outsideWorker} (대상: ${t})`;
 }
+// 쓰기 소유권(PRD R3) — 작업에 소유 경로(HARNESS_OWNS: glob 의 JSON 배열)가 있으면 worktree 안이라도 그 밖은 쓰지도 지우지도 못한다.
+//   [2026-10-20] 여러 작업자가 한 저장소를 동시에 고칠 때 엉키지 않게 하는 첫 벽. 하네스 기록(.harness/<id>/)은 언제나 된다.
+//   glob: ** = 아무 깊이 · * = 한 단계 안 · ? = 한 글자 · 글자만 있으면 그 파일이나 그 폴더 아래 전부. Windows 는 대소문자 무시.
+function ownedGlobs() {
+  const raw = process.env.HARNESS_OWNS;
+  if (!raw) return null;
+  try { const a = JSON.parse(raw); return Array.isArray(a) && a.length ? a.map(String) : null; } catch { return null; }
+}
+function globRe(g) {
+  const p = String(g).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!/[*?]/.test(p)) return new RegExp(`^${p.replace(/[.+^${}()|[\]]/g, '\\$&')}(/.*)?$`, C.IS_WIN ? 'i' : '');
+  let re = '';
+  for (let i = 0; i < p.length; i++) {
+    const ch = p[i];
+    if (ch === '*' && p[i + 1] === '*') { re += p[i + 2] === '/' ? '(?:.*/)?' : '.*'; i += p[i + 2] === '/' ? 2 : 1; }
+    else if (ch === '*') re += '[^/]*';
+    else if (ch === '?') re += '[^/]';
+    else re += ch.replace(/[.+^${}()|[\]]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, C.IS_WIN ? 'i' : '');
+}
+function owned(rel, globs) { return globs.some(g => globRe(g).test(rel)); }
+function ownsCheck(root, norm, t, ctx) {
+  const globs = ctx.owns !== undefined ? ctx.owns : ownedGlobs();
+  if (!globs) return null;
+  const rel = path.relative(C.real(root), norm).replace(/\\/g, '/');
+  if (rel === '') return `${REASONS.workerOwns} (대상: worktree 전체)`;
+  if (/^\.harness(\/|$)/.test(rel) || owned(rel, globs)) return null;
+  return `${REASONS.workerOwns} (대상: ${rel} · 소유: ${globs.join(', ')})`;
+}
+// 파일 쓰기 도구(Edit · Write · MultiEdit · NotebookEdit) — 셸 명령과 같은 경계(worktree · 소유 경로)
+function checkFileWrite(file, cwd, owns) {
+  const ctx = ctxFor({ cwd, worker: true });
+  if (owns !== undefined) ctx.owns = owns;
+  return workerTarget(String(file), 'bash', ctx, true);
+}
+
 function outsideWorktree(targets, mode, ctx) {
   for (const t of targets) { const r = workerTarget(t, mode, ctx, true); if (r) return r; }
   return null;
@@ -777,8 +821,10 @@ function decide(input, runtime, opts) {
   if (!tool || tool === 'apply_patch' || tool.startsWith('mcp__')) return null;
   const ti = input.tool_input;
   if (!ti || typeof ti !== 'object') return null;
-  const c = ti.command != null ? ti.command : ti.cmd;
   const cwd = input.cwd && typeof input.cwd === 'string' ? input.cwd : process.cwd();
+  // 파일 쓰기 도구 — 작업자 모드에서만(worktree 밖 · 소유 경로 밖을 막는다). 대화형 세션의 편집은 막지 않는다.
+  if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) { const file = ti.file_path || ti.notebook_path; return worker && file ? checkFileWrite(file, cwd) : null; }
+  const c = ti.command != null ? ti.command : ti.cmd;
   // Codex 는 argv 배열(["powershell","-Command","…"] · ["bash","-lc","…"])로 줄 수 있다 — 이미 쪼개진 단어다.
   if (Array.isArray(c)) return c.length ? analyzeCommand(c.map(String), modeFor(tool, runtime), { cwd, root: undefined, depth: 0, worker, vars: {}, loops: {} }) : null;
   if (typeof c !== 'string' || !c.trim()) return null;
@@ -802,4 +848,4 @@ function main() {
 }
 
 if (require.main === module) { main(); process.exitCode = 0; }
-module.exports = { lex, analyze, decide, isDangerousTarget, checkGit };
+module.exports = { lex, analyze, decide, checkFileWrite, globRe, isDangerousTarget, checkGit };

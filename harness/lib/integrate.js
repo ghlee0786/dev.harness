@@ -56,6 +56,15 @@ function dirtyOverlap(cwd, files) {
   return [...new Set(hits)];
 }
 
+// [PRD R1] 작업을 치울 때 git 밖 자원(볼륨 · 이미지 · 임시 폴더 · 프로젝트 정리 명령)을 회수한다 — 실패해도 병합 · 취소는 그대로, 남은 것은 기록한다.
+function releaseResources(root, task) {
+  try {
+    const r = require('./resources').release(root, task);
+    if (Object.keys(r.docker.removed).length || r.residue.length || r.cleanup || (r.tmp && r.tmp.removed)) S.log(root, task.id, { event: 'resources_released', docker: r.docker.removed, cleanup: r.cleanup && { ok: r.cleanup.ok, exit_code: r.cleanup.exit_code }, tmp_removed: !!(r.tmp && r.tmp.removed), residue: r.residue });
+    return r;
+  } catch (e) { task.resources = { ...(task.resources || {}), error: String(e.message).slice(0, 200) }; return null; }
+}
+
 function withTaskLock(root, task, fn) {
   let h;
   try { h = S.acquire(root, `task-${task.id}`); }
@@ -323,6 +332,7 @@ async function accept(o) {
       task.worktree_kept = rm.why;
       if (rm.ignored) task.outside_git = { ...(task.outside_git || {}), ignored_changed: rm.ignored };
     }
+    releaseResources(root, task);
     // go --doc 로 연결한 관리 문서: tasks 에 id · updated · 색인. git 이 추적하는 문서만 그 경로로 커밋한다. 실패해도 병합은 그대로.
     let docLines = [];
     if ((task.docs || []).length) {
@@ -450,6 +460,7 @@ async function cancel(o) {
     // 원래 상태와 그 이유를 남긴다 — restore 뒤 accept 가 (강제일 때) 실패 이유를 앞세울 수 있게.
     Object.assign(task, { status: 'cancelled', cancelled_from: task.status, cancelled_from_reason: task.reason || '', reason: `discarded before merge${kept ? `; the work stays reachable at tag ${tag}` : ''}`, cancelled_at: S.nowIso() });
     delete task.worktree_kept;
+    releaseResources(root, task);
     S.writeTask(root, task);
     S.log(root, task.id, { event: 'cancelled', after_merge: false, tag: kept ? tag : null });
     if (isKo(task)) return out(task, { report: [`harness ${task.id} — 취소`, `브랜치 ${task.branch} 와 worktree 를 버렸다${kept ? ` — 커밋은 태그 ${tag} 에 남는다` : ''}.`, `되살리기: node harness/cli.js restore ${task.id}`].join('\n') });

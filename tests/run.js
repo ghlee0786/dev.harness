@@ -31,6 +31,12 @@ function runFile(file, timeoutMs) {
   return new Promise(resolve => {
     const t0 = Date.now(), env = { ...process.env };
     delete env.NODE_TEST_CONTEXT;
+    // 작업이 끝날 때마다 docker 를 띄워 보지 않게(테스트의 작업은 컨테이너를 만들지 않는다) — 자원 장부의 docker 경로는 test_v5_resources 가 가짜 실행기로 잰다
+    if (env.HARNESS_DOCKER_CLEANUP == null) env.HARNESS_DOCKER_CLEANUP = 'off';
+    // 작업마다의 임시 폴더(자원 장부)를 이 테스트 파일 전용 폴더 아래로 — 비정상 종료를 흉내 내는 테스트가 남긴 것까지 끝나면 통째로 지운다
+    //   [2026-10-20] 테스트가 사용자의 OS 임시 폴더에 빈 폴더 1,098개와 작업 폴더 수십 개를 남겼다.
+    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-test-tmp-'));
+    env.HARNESS_TMP_BASE = tmpBase;
     const child = spawn(process.execPath, [file], { cwd: path.resolve(__dirname, '..'), env, windowsHide: true });
     let out = '';
     const keep = d => { out += d; if (out.length > 2e6) out = out.slice(-1e6); };
@@ -43,6 +49,7 @@ function runFile(file, timeoutMs) {
     }, timeoutMs);
     child.on('close', code => {
       clearTimeout(timer);
+      try { fs.rmSync(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); } catch { /* 다음 실행의 오래된 폴더 정리가 치운다 */ }
       const m = RESULT.exec(out.split(/\r?\n/).reverse().find(l => RESULT.test(l)) || '');
       resolve({ file, code, timedOut, ms: Date.now() - t0, pass: m ? +m[1] : 0, fail: m ? +m[2] : 0, found: !!m, out });
     });
@@ -56,7 +63,7 @@ function sweepStaleTmp(dir, now) {
   const d = dir || os.tmpdir(), gone = [];
   let names = []; try { names = fs.readdirSync(d); } catch { return gone; }
   for (const n of names) {
-    if (!/^harness-(v5-[a-z]+|eval-test)-[A-Za-z0-9]{6}$/.test(n)) continue;
+    if (!/^harness-(v5-[a-z]+|eval-test|test-tmp)-[A-Za-z0-9]{6}$/.test(n)) continue;
     const f = path.join(d, n);
     try { if ((now || Date.now()) - fs.statSync(f).mtimeMs < STALE_TMP_MS) continue; fs.rmSync(f, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); gone.push(n); } catch { /* 다음에 */ }
   }

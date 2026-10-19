@@ -122,7 +122,7 @@ function claudeSettings(allowCommands, extraAllow, mode) {
   if (mode === 'open') {
     return {
       permissions: { allow: ['Bash(*)', 'PowerShell(*)', 'Monitor', 'Read', 'Grep', 'Glob'], deny: rules(DENY_GIT.filter(x => !GUARD_GIT.includes(x))), disableBypassPermissionsMode: 'disable' },
-      hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell|Monitor', hooks: [{ type: 'command', command: `node "${GUARD}" --worker`, timeout: 15 }] }] },
+      hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell|Monitor|Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: `node "${GUARD}" --worker`, timeout: 15 }] }] },
     };
   }
   const progs = [...new Set((allowCommands || []).map(String).filter(n => SAFE_NAME.test(n) && !isNeverAllowed(n)))];

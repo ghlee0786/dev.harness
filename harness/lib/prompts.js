@@ -10,6 +10,8 @@ const AUTONOMY = [
   // [2026-10-17 자동 보고 caed67b9a2f1] 작업자가 worktree 의 compose 로 사용자의 실행 중 컨테이너를 다시 만들어 서비스가 멈췄다.
   'Do not stop, restart or recreate the running services, containers or processes of the main checkout — they are in use. If you need to run services, start your own (the harness gives this worktree its own COMPOSE_PROJECT_NAME) and stop them when you are done.',
   'Irreversible actions are forbidden: no git push, no merging or resetting branches, and no deleting anything outside this worktree. Deleting or renaming files inside this worktree is fine when the goal needs it (including files earlier tasks created) — the harness commits after every turn, so it can be undone.',
+  // [2026-10-20 PRD R1] 시험 뒤 쓰레기 — 하네스가 회수할 수 있는 곳에만 만든다
+  'Leave no garbage: put scratch files in $TEMP (TEMP · TMP · TMPDIR — this task\'s own folder, deleted by the harness), and name or prefix any test data you create outside the worktree (databases, schemas, queues, caches, buckets) with $HARNESS_DATA_NS so it can be cleaned up.',
 ].join(' ');
 
 // 작업 언어(task.language) — 사람이 읽는 것(PLAN.md · BLOCKED.md · 마지막 말)은 그 언어로. [2026-10-08] 지시가 없어 영어로 나왔다.
@@ -97,7 +99,7 @@ function lintFailMessage(t, r, excerpt, deadlineMs) {
 function taskPrompt(t, o) {
   const rel = `.harness/${t.id}`;
   const docs = docsLines(t, o && o.root);
-  return ['# Goal', t.goal, '', ...docs, ...attachmentLines(t),
+  return ['# Goal', t.goal, '', ...docs, ...attachmentLines(t), ...require('./worklog').promptLines(o && o.root, t),
     `${docs.length ? 'The goal and these documents are' : 'This is'} the complete specification. Do not expand scope beyond it.`, '',
     '# Working rules',
     `- Keep a living plan at \`${rel}/PLAN.md\`: goal, progress (checked items), decisions, discoveries, remaining work. A fresh session must be able to continue from that file and the git log alone.`,
@@ -105,6 +107,8 @@ function taskPrompt(t, o) {
     // [2026-10-16 사용자 지시] 시작 때 묻지 않고 지시를 바탕으로 끝까지 스스로 판단한다 — 결과를 바꾼 갈림길만 완성 뒤 보고에 정리한다(하네스가 DECISIONS.md 를 읽는다).
     `- Decision points: when you reach a fork that the goal and the repository do not settle — two or more reasonable options that change the result (behaviour, data or API shape, scope, dependencies, what the user sees) — never ask and never stop; pick the option that best fits the user's instructions and is easiest to change later, and keep going. Record each fork in \`${rel}/DECISIONS.md\` as a section: \`## <n>. <the fork in one line>\` followed by the lines \`- options: …\`, \`- chosen: …\`, \`- why: …\`, \`- effect: … (and how to change it later)\`. Only real forks — not routine implementation details. The harness shows them to the user when the work is done.`,
     ...(languageLine(t) ? [`- ${languageLine(t)}`] : []),
+    // [PRD R3] 쓰기 소유 경로 — 다른 작업자와 동시에 같은 저장소를 고친다
+    ...((t.owns || []).length ? [`- You may change only these paths: ${t.owns.map(g => `\`${g}\``).join(', ')} (plus \`${rel}/\` and $TEMP). Other tasks are changing the rest of this repository in parallel, so everything else is read-only for you — the harness blocks writes outside these paths. If the goal needs a change elsewhere (an interface, a shared registration, a config), do not work around it: write in \`${rel}/DECISIONS.md\` what must change, where and why.`] : []),
     `- If the task is impossible or the specification contradicts itself, write \`${rel}/BLOCKED.md\` explaining why and stop.`,
     '- Do not run git commands that write (commit, checkout, reset, merge, stash, branch). The harness commits after every turn.',
     // [2026-10-13 영상 "쓰레기 코드 없애는 법"] AI 는 더하기 기계다 — 덜 쓰게 한다(효과는 평가로 잰다: 숨은 검사 통과율 · 추가 줄 수).

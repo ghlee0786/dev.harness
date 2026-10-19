@@ -139,7 +139,7 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
 
     // ── cancel(병합 전): 미커밋분은 먼저 커밋 → 태그로 남기고 브랜치 · worktree 버림 → restore ─
     const r4 = mkRepo();
-    const i4 = await L.go({ ...quiet, root: r4, goal: 'half', checks: ['node check.js'], run: fake([o => { write(path.join(o.cwd, 'half.txt'), 'h'); return { is_error: true, error_kind: 'quota', error_message: 'usage limit', session_id: 'S4' }; }]) });
+    const i4 = await L.go({ ...quiet, root: r4, goal: 'half', checks: ['node check.js'], quotaWait: false, run: fake([o => { write(path.join(o.cwd, 'half.txt'), 'h'); return { is_error: true, error_kind: 'quota', error_message: 'usage limit', session_id: 'S4' }; }]) });
     const P4 = S.taskPaths(r4, i4.id);
     git(r4, ['worktree', 'add', '-q', P4.wt, i4.branch]);
     write(path.join(P4.wt, 'uncommitted.txt'), 'not yet committed\n');
