@@ -187,6 +187,20 @@ const steps = list => { const calls = []; const run = async o => { const n = cal
       R.check('[QL-03] 규칙을 끌 수 있다(quality_off: ["debug"])', Q.find(d, b, { off: ['debug'] }).length === 0 && Q.find(d, b).some(x => x.rule === 'debug'), JSON.stringify(Q.find(d, b)));
     }
     {
+      // [2026-10-19 현장 오탐] 프레임워크가 부르는 정의(@router.get · [HttpGet] · @Get()) · 사유를 단 억누르기 · 테스트 파일의 억누르기는 군더더기가 아니다
+      const { d, b } = qrepo({ 'src/api.py': 'x = 1\n', 'src/Ctl.cs': 'class Ctl {\n}\n', 'src/c.ts': 'export const a = 1;\n' });
+      write(path.join(d, 'src/api.py'), ['x = 1', '@router.get(', '    "/items",', '    response_model=Items,', ')', 'async def list_items():', '    return []', '',
+        '@app.post("/x")', 'def make_x():', '    try:', '        return 1', '    except Exception:  # noqa: BLE001 — 외부 SDK 가 아무 예외나 던진다', '        return 0', '',
+        'def orphan_helper():', '    return 2', 'y = 1  # noqa: E501', ''].join('\n'));
+      write(path.join(d, 'src/Ctl.cs'), 'class Ctl {\n  [HttpGet("items")]\n  public IActionResult ListItems() { return Ok(); }\n#pragma warning disable CS0618 // 옛 API 를 바꾸면 소비자가 깨진다\n}\n');
+      write(path.join(d, 'src/c.ts'), 'export const a = 1;\nclass K {\n  @Get()\n  public async findAll() { return []; }\n}\nexport const k = new K();\n// eslint-disable-next-line no-console -- CLI 출력이다\nexport const z = 2;\n');
+      write(path.join(d, 'tests/test_api.py'), 'import sys\nsys.path.insert(0, ".")\nfrom src import api  # noqa: E402\n');
+      const f = Q.find(d, b);
+      const un = f.filter(x => x.rule === 'unused').map(x => x.text).sort().join(','), sup = f.filter(x => x.rule === 'suppress').map(x => `${x.file}:${x.line}`).join(',');
+      R.check('[QL-07] 데코레이터 · 어트리뷰트가 붙은 정의는 쓰이지 않는 정의로 잡지 않는다(그냥 남긴 함수는 잡는다)', un === 'orphan_helper', JSON.stringify(f.filter(x => x.rule === 'unused')));
+      R.check('[QL-07] 사유를 단 억누르기 · 테스트 파일의 억누르기는 잡지 않는다(사유 없는 것은 잡는다)', sup === 'src/api.py:18', JSON.stringify(f.filter(x => x.rule === 'suppress')));
+    }
+    {
       // 루프: 품질 규칙 · 중복은 한 번에 모아 한 번만 돌려보낸다 → 고치면 done · 남겨도 done(정체 아님) · 보고에 규칙별로
       const d9 = dupRepo(); const calls9 = [];
       const run9 = async o => { calls9.push(o.prompt); write(path.join(o.cwd, 'src/b.js'), calls9.length === 1 ? `${FN.replace('function total', 'function total2')}console.log("x");\ndebugger;\nmodule.exports = { total2 };\n` : 'const { total } = require("./a");\nmodule.exports = { total2: total };\n'); return { ok: true, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.1, is_error: false, permission_denials: [] }; };

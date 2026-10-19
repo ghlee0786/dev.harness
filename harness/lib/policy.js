@@ -115,11 +115,14 @@ function checkAllowRules(list, where) {
 //   open: Bash · PowerShell 은 전부 허용하고, git 쓰기 deny 는 그대로 두며, 되돌릴 수 없는 명령(저장소 밖 삭제 · 강제 reset 등)은
 //   대화형 세션과 같은 guard 훅이 거른다. push 와 이 저장소의 ref 변경은 git 수준(proc.noPushEnv · reference-transaction 훅)에서 따로 막힌다.
 const GUARD = require('node:path').join(__dirname, '..', 'hooks', 'guard.js');
+// [2026-10-19 현장 재평가] open 에서 접두 deny 가 읽기까지 막았다(git stash list · git -C <다른 저장소> status · git config --get) —
+//   이 접두들은 guard(--worker)가 읽기 형태만 통과시킨다. worktree 밖 읽기(Read · Grep · Glob)도 허용 — Bash(*) 로 이미 cat 이 된다.
+const GUARD_GIT = ['git stash', 'git config', 'git -C', 'git --git-dir', 'git --work-tree'];
 function claudeSettings(allowCommands, extraAllow, mode) {
   if (mode === 'open') {
     return {
-      permissions: { allow: ['Bash(*)', 'PowerShell(*)'], deny: rules(DENY_GIT), disableBypassPermissionsMode: 'disable' },
-      hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: `node "${GUARD}" --worker`, timeout: 15 }] }] },
+      permissions: { allow: ['Bash(*)', 'PowerShell(*)', 'Monitor', 'Read', 'Grep', 'Glob'], deny: rules(DENY_GIT.filter(x => !GUARD_GIT.includes(x))), disableBypassPermissionsMode: 'disable' },
+      hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell|Monitor', hooks: [{ type: 'command', command: `node "${GUARD}" --worker`, timeout: 15 }] }] },
     };
   }
   const progs = [...new Set((allowCommands || []).map(String).filter(n => SAFE_NAME.test(n) && !isNeverAllowed(n)))];

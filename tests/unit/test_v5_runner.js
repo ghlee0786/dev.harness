@@ -60,6 +60,8 @@ async function waitFile(f, ms) { const t0 = Date.now(); while (Date.now() - t0 <
     //   open(기본): 명령은 다 허용 · git 쓰기는 deny 그대로 · 되돌릴 수 없는 명령은 guard 훅(대화형과 같은 것)이 거른다.
     const op = policy.claudeSettings(['node'], [], 'open');
     R.check('[RN-01d] open: Bash · PowerShell 전부 허용 · git 쓰기 deny 는 그대로', op.permissions.allow.includes('Bash(*)') && op.permissions.allow.includes('PowerShell(*)') && op.permissions.deny.includes('Bash(git push:*)') && op.permissions.deny.includes('PowerShell(git commit:*)'), JSON.stringify(op.permissions));
+    R.check('[RN-01d] open: worktree 밖 읽기(Read · Grep · Glob) 허용 · git -C · stash · config 는 deny 대신 guard 가 읽기만 통과(쓰기 deny 는 남는다)',
+      ['Read', 'Grep', 'Glob', 'Monitor'].every(x => op.permissions.allow.includes(x)) && /Monitor/.test(op.hooks.PreToolUse[0].matcher) && !op.permissions.deny.some(x => /git (-C|stash|config|--git-dir|--work-tree):/.test(x)) && op.permissions.deny.includes('Bash(git reset:*)') && op.permissions.deny.includes('Bash(git checkout:*)'), JSON.stringify(op.permissions));
     const gh = (((op.hooks || {}).PreToolUse || [])[0] || {});
     R.check('[RN-01d] open: guard 훅(hooks/guard.js)을 Bash · PowerShell 앞에 건다', /Bash/.test(gh.matcher || '') && /PowerShell/.test(gh.matcher || '') && (gh.hooks || []).some(h => /--worker/.test(h.command) && fs.existsSync((/"([^"]+guard\.js)"/.exec(h.command) || [])[1] || '')), JSON.stringify(op.hooks));
     R.check('[RN-01d] strict(예전): 기본 인자는 그대로 허용 목록', !allow.includes('Bash(*)') && !st.hooks, JSON.stringify(allow).slice(0, 200));

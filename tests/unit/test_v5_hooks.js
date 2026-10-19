@@ -448,6 +448,45 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
         [`echo x > "${advTmp.replace(/\\/g, '/')}/scratch.txt"`, 'Bash'], ['rm -rf "$PWD/build"', 'Bash'], ['node -e "console.log(1)"', 'Bash'], ['cat a.js > /dev/null', 'Bash']];
       const passedW = mustPassW.map(([c, t]) => [c, !dec(c, t)]);
       R.check('[guard/worker-adv] 작업자 모드: worktree 안 · 임시 폴더 · 이 작업의 compose 는 그대로 통과', passedW.every(x => x[1]), JSON.stringify(passedW.filter(x => !x[1]).map(x => [x[0], String(dec(x[0], 'Bash')).slice(0, 80)])));
+      // [2026-10-19 적대적 재평가 · 현장 66건] 정당한 명령을 막았다 — 같은 명령에서 정한 변수 · $env:TEMP · Git Bash /tmp · worktree 안 하위 저장소 · docker 읽기
+      const W2 = wtA.replace(/\\/g, '/');
+      fs.mkdirSync(path.join(wtA, 'nested'), { recursive: true }); git(path.join(wtA, 'nested'), 'init', '-q');
+      const decAt = (cmd, tool, cwd) => { const keep = ['TEMP', 'TMP', 'TMPDIR'].map(k => [k, process.env[k]]); for (const [k] of keep) process.env[k] = advTmp; try { return G.decide({ tool_name: tool, tool_input: { command: cmd }, cwd: cwd || wtA }, 'claude', { worker: true }); } finally { for (const [k, v] of keep) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } } };
+      const fp = [[`W=${W2}/sub; mkdir -p $W && rm -rf "$W/old"`, 'Bash'], [`$root = "${wtA}\\obj\\h3d"; New-Item -ItemType Directory -Force "$root\\x" | Out-Null`, 'PowerShell'],
+        [`$wt='${wtA}'; Remove-Item -Recurse -Force "$wt\\bin"`, 'PowerShell'], ['dotnet test x.sln 2>&1 | Out-File -Encoding utf8 "$env:TEMP\\t.log"', 'PowerShell'],
+        ['dotnet test x.sln > /tmp/t.log 2>&1', 'Bash'], ['rm -rf /tmp/basechk && mkdir /tmp/basechk', 'Bash'],
+        ['docker images --format x', 'Bash'], ['docker network ls', 'Bash'], ['docker ps -a', 'Bash'], ['docker volume ls', 'Bash']];
+      const fpRes = fp.map(([c, t]) => [c.slice(0, 70), !decAt(c, t)]);
+      const nested = !decAt('rm -rf ../build && rm -f ../a.txt', 'Bash', path.join(wtA, 'nested'));
+      R.check('[guard/worker-fp] 정당한 명령은 막지 않는다: 같은 명령의 변수 · $env:TEMP · /tmp · worktree 안 하위 저장소 · docker 읽기',
+        fpRes.every(x => x[1]) && nested, JSON.stringify({ blocked: fpRes.filter(x => !x[1]).map(x => x[0]), nested }));
+      const stillBlock = [[`W=${U}; rm -rf "$W"`, 'Bash'], [`export W=${U}; rm -rf "$W"`, 'Bash'], [`W=${U}; cd $W && rm -rf build`, 'Bash'],
+        ['rm -rf /tmp/../c/x', 'Bash'], ['docker network rm x', 'Bash'], ['docker container prune -f', 'Bash'], ['docker image rm a', 'Bash']];
+      // 2차(현장 재현에서 남은 것): 반복 변수 · $(pwd) · (Resolve-Path .).Path · Join-Path · 하네스가 준 compose 이름 · 한 줄 코드 속 URL 경로
+      const fp2 = [['for d in out-a out-b; do mkdir -p $d && cp -r src $d/; done', 'Bash'], ['for f in logs/m-*.log; do mv $f ${f%.log}-run1.log; done', 'Bash'],
+        ["foreach ($d in 'A.B','C.D') { robocopy \"src\\$d\" \"out\\$d\" *.cs /E }", 'PowerShell'], ['W=$(pwd); mkdir -p "$W/out" && cp a.txt "$W/out/a.txt"', 'Bash'],
+        ["$dst=(Resolve-Path .).Path + '\\copy'; New-Item -ItemType Directory -Force $dst | Out-Null; New-Item -ItemType Directory -Force \"$((Resolve-Path .).Path)\\copy2\" | Out-Null", 'PowerShell'],
+        ["$dst = Join-Path $PWD '.gis'; robocopy src \"$dst\\x\" /E", 'PowerShell'], ['$root = "$PWD\\obj\\h3d"; New-Item -ItemType Directory -Force "$root\\pristine" | Out-Null', 'PowerShell'],
+        ['docker compose -p "$COMPOSE_PROJECT_NAME" -f sim/compose.yaml config --quiet', 'Bash'],
+        [`python -c "import json; out = {'s': get('/api/ha/status')}; open('out.json', 'w').write(json.dumps(out))"`, 'Bash']];
+      const fp2Res = fp2.map(([c, t]) => [c.slice(0, 70), !decAt(c, t), String(decAt(c, t) || '').slice(-60)]);
+      R.check('[guard/worker-fp] 2차: 반복 변수 · $(pwd) · Join-Path · 하네스의 compose 이름 · 한 줄 코드 속 URL 은 막지 않는다', fp2Res.every(x => x[1]), JSON.stringify(fp2Res.filter(x => !x[1])));
+      const stillBlock2 = [[`for d in ok ${U}; do rm -rf $d; done`, 'Bash'], [`for d in a b; do cp x ${U}/$d; done`, 'Bash'], ['docker compose -p other up -d', 'Bash'],
+        [`$dst = Join-Path "${Uw}" 'x'; Remove-Item -Recurse -Force $dst`, 'PowerShell'], [`$dst = "${Uw}" + '\\x'; New-Item -ItemType Directory -Force $dst`, 'PowerShell'], [`python -c "open('${U}/k.txt', 'w').write('x')"`, 'Bash']];
+      R.check('[guard/worker-fp] 2차: 반복 값 하나라도 밖이면 · 다른 compose 이름 · Join-Path 로 만든 밖 경로 · 한 줄 코드의 밖 쓰기는 막는다', stillBlock2.every(([c, t]) => !!decAt(c, t)), JSON.stringify(stillBlock2.map(([c, t]) => [c.slice(0, 50), !!decAt(c, t)])));
+      // 3차: open 모드는 git -C · stash · config 를 권한 deny 대신 guard 가 거른다 — 읽기는 통과, 쓰기는 막는다
+      const gitRead = [[`git -C "${U}" status --short`, 'Bash'], [`git -C ${U} log --oneline -3`, 'PowerShell'], ['git stash list', 'Bash'], ['git stash show -p stash@{0}', 'Bash'],
+        ['git config --get core.autocrlf', 'Bash'], ['git config core.autocrlf', 'Bash'], ['git config --list', 'PowerShell'], [`git -C "${U}" archive -o out/a.tar HEAD`, 'Bash'], [`git -C "${U}" apply --check x.patch`, 'Bash'], [`git -C "${U}" branch --show-current`, 'PowerShell'], [`git -C "${U}" remote -v`, 'Bash']];
+      const gitWrite = [[`git -C "${U}" checkout -- .`, 'Bash'], [`git -C "${U}" commit -m x`, 'Bash'], [`git --git-dir="${U}/.git" reset --hard`, 'Bash'], ['git stash', 'Bash'], ['git stash pop', 'Bash'],
+        ['git config user.name x', 'Bash'], ['git config --unset core.x', 'Bash'], [`git -C "${U}" archive -o "${U}/a.tar" HEAD`, 'Bash'], [`git -C "${U}" apply x.patch`, 'Bash'], [`git -C . push`, 'Bash'], [`git -C "${U}" branch -D old`, 'Bash'], [`git -C "${U}" branch newb`, 'Bash'], [`git -C "${U}" remote add o x`, 'Bash'], [`git -C "${U}" tag v1`, 'Bash']];
+      const gr = gitRead.map(([c, t]) => [c.slice(0, 60), !decAt(c, t)]), gw = gitWrite.map(([c, t]) => [c.slice(0, 60), !!decAt(c, t)]);
+      R.check('[guard/worker-git] git -C · stash · config: 읽기(status · log · archive · stash list · config --get)는 통과', gr.every(x => x[1]), JSON.stringify(gr.filter(x => !x[1])));
+      R.check('[guard/worker-git] git -C · --git-dir · stash · config: 쓰기(checkout · commit · reset · stash · config 설정 · 밖으로 archive · apply · push)는 막는다', gw.every(x => x[1]), JSON.stringify(gw.filter(x => !x[1])));
+      // Monitor 도구(open 에서 허용) — 권한의 git deny 가 붙지 않으므로 guard 가 git 을 읽기만 통과시킨다
+      const mon = { pass: ['until grep -q "exit=" out.log; do sleep 2; done', 'git status --short'].map(c => !decAt(c, 'Monitor')),
+        block: ['git commit -am x', 'git add -A', 'git push', `rm -rf "${U}"`, 'git checkout main'].map(c => !!decAt(c, 'Monitor')) };
+      R.check('[guard/worker-monitor] Monitor: 기다리기 · git 읽기는 통과, git 쓰기 · worktree 밖 삭제는 막는다', mon.pass.every(Boolean) && mon.block.every(Boolean), JSON.stringify(mon));
+      R.check('[guard/worker-fp] 변수를 풀어도 worktree 밖이면 막는다 · docker 의 rm/prune 은 막는다', stillBlock.every(([c, t]) => !!decAt(c, t)), JSON.stringify(stillBlock.map(([c, t]) => [c.slice(0, 50), !!decAt(c, t)])));
     }
 
     R.check('[격리] 가짜 HOME 에 .claude · .codex 가 생기지 않았다', !fs.existsSync(path.join(home, '.claude')) && !fs.existsSync(path.join(home, '.codex')));

@@ -178,11 +178,16 @@ function analyze(command, opts) {
   const cwd = opts.cwd || process.cwd();
   // 작업자 모드의 경계는 처음 cwd 의 worktree 로 고정한다 — [2026-10-17 적대적 검증] `cd <메인 저장소> && rm -rf src` 에서
   //   경계를 cd 뒤의 저장소(메인)로 다시 잡아 메인의 소스 삭제가 "안쪽" 으로 판정됐다.
-  const info0 = opts.wtRoot === undefined && opts.worker ? C.repoInfo(cwd) : null;
-  const wtRoot = opts.wtRoot !== undefined ? opts.wtRoot : (info0 ? info0.root : null);
+  // 경계는 하네스 worktree(<메인>/.harness-worktrees/<id>) — [2026-10-19 현장] worktree 안의 하위 git 저장소에서는 repoInfo 가
+  //   그 하위 저장소를 돌려줘 worktree 의 다른 부분을 "밖" 으로 봤다. 경로 모양으로 먼저 찾고, 아니면 git 으로.
+  const wtm = opts.worker && opts.wtRoot === undefined ? /^(.*?)[\\/]\.harness-worktrees[\\/](t-\d{8}-\d{6}-[0-9a-f]{4}(?:-\d+)?)(?=[\\/]|$)/.exec(cwd) : null;
+  const info0 = opts.wtRoot === undefined && opts.worker && !wtm ? C.repoInfo(cwd) : null;
+  const wtRoot = opts.wtRoot !== undefined ? opts.wtRoot : wtm ? path.join(wtm[1], '.harness-worktrees', wtm[2]) : (info0 ? info0.root : null);
   // 메인 저장소(공통 .git 의 부모) — 임시 폴더 안에 있어도 그 안은 임시 폴더 예외를 받지 않는다
-  const mainRoot = opts.mainRoot !== undefined ? opts.mainRoot : (info0 && path.basename(info0.common).toLowerCase() === '.git' ? path.dirname(info0.common) : null);
-  const ctx = { cwd, root: undefined, depth: opts.depth || 0, worker: !!opts.worker, wtRoot, mainRoot, cwdUnknown: !!opts.cwdUnknown };
+  const mainRoot = opts.mainRoot !== undefined ? opts.mainRoot : wtm ? wtm[1] : (info0 && path.basename(info0.common).toLowerCase() === '.git' ? path.dirname(info0.common) : null);
+  const ctx = { cwd, root: undefined, depth: opts.depth || 0, worker: !!opts.worker, wtRoot, mainRoot, cwdUnknown: !!opts.cwdUnknown, vars: opts.vars || {}, loops: opts.loops || {}, gitReadOnly: !!opts.gitReadOnly };
+  // 지금 폴더를 돌려주는 치환($(pwd) · (Resolve-Path .).Path · (Get-Location).Path · $PWD.Path)은 $PWD 와 같다 — 그때의 cwd 로 푼다
+  if (opts.worker) command = String(command).replace(/\$\(\s*pwd\s*\)|`pwd`|\$\(\s*\(\s*(?:Resolve-Path\s+\.|Get-Location)\s*\)\.Path\s*\)|\(\s*(?:Resolve-Path\s+\.|Get-Location)\s*\)\.Path|\$\(\s*Get-Location\s*\)|\$PWD\.Path/gi, '$PWD');
   return analyzeString(command, opts.mode || 'bash', ctx);
 }
 
@@ -196,7 +201,47 @@ function analyzeString(src, mode, ctx) {
   return null;
 }
 
+// 같은 명령 안의 변수 대입(W=… · $root = … · $wt=…)을 기억한다 — 작업자 모드가 "$W/old" 같은 경로를 풀 수 있게. [2026-10-19 현장 오탐]
+//   반복 변수(for d in a b · foreach ($d in 'a','b'))는 값 목록으로 — 경로마다 값을 하나씩 넣어 모두 안쪽이어야 통과한다.
+function rememberVar(words0, ctx) {
+  const w = words0.filter(x => x !== '');
+  if (w[0] === 'for' && w[2] === 'in' && /^[A-Za-z_]\w*$/.test(w[1] || '')) { ctx.loops[w[1].toLowerCase()] = w.slice(3); return false; }
+  if (w.length === 3 && w[1] === 'in' && /^\$[A-Za-z_]\w*$/.test(w[0])) { ctx.loops[w[0].slice(1).toLowerCase()] = w[2].split(',').map(x => x.trim().replace(/^["']|["']$/g, '')).filter(Boolean); return true; }
+  let m = w.length === 1 && /^\$?([A-Za-z_]\w*)=(.*)$/s.exec(w[0]);
+  if (!m && w.length === 3 && w[1] === '=' && /^\$[A-Za-z_]\w*$/.test(w[0])) m = [null, w[0].slice(1), w[2]];
+  // PowerShell 이어붙이기: $x = A + 'B' · $x=A + 'B'
+  if (!m) { const h = /^\$([A-Za-z_]\w*)(?:=(.+))?$/s.exec(w[0] || ''), parts = h && (h[2] != null ? [h[2], ...w.slice(1)] : w[1] === '=' ? w.slice(2) : null);
+    if (parts && parts.length >= 3 && parts.length % 2 === 1 && parts.every((x, i) => (i % 2 === 1) === (x === '+'))) m = [null, h[1], parts.filter((_, i) => i % 2 === 0).map(x => expandVars(x.replace(/^["']|["']$/g, ''), ctx)).join('')]; }
+  // $x = Join-Path A B · $x=Join-Path A B
+  if (!m) { const j = w.length === 5 && w[1] === '=' && /^\$[A-Za-z_]\w*$/.test(w[0]) && /^join-path$/i.test(w[2]) ? [w[0], w[3], w[4]] : w.length === 3 && /^\$[A-Za-z_]\w*=join-path$/i.test(w[0]) ? [w[0].replace(/=.*/, ''), w[1], w[2]] : null;
+    if (j) m = [null, j[0].slice(1), `${expandVars(j[1].replace(/^["']|["']$/g, ''), ctx)}${path.sep}${j[2].replace(/^["']|["']$/g, '')}`]; }
+  if (!m) return false;
+  ctx.vars[m[1].toLowerCase()] = expandVars(String(m[2]).replace(/^["']|["']$/g, ''), ctx);
+  return true;
+}
+// 경로에 반복 변수가 있으면 값마다 넣어 본다 — fn 이 처음 돌려준 사유(없으면 null). 반복 변수가 없으면 undefined.
+function eachLoopValue(t, ctx, fn) {
+  const names = Object.keys(ctx.loops || {}).filter(n => new RegExp(`\\$\\{?${n}(?![\\w])`, 'i').test(t));
+  if (!names.length) return undefined;
+  const n = names[0], vals = ctx.loops[n];
+  if (!vals.length) return fn(t.replace(new RegExp(`\\$\\{?${n}(?![\\w])`, 'gi'), SUB));
+  for (const v of vals) {
+    const s = t.replace(new RegExp(`\\$\\{${n}%([^}]*)\\}`, 'gi'), (x, suf) => v.endsWith(suf) ? v.slice(0, -suf.length) : v)
+      .replace(new RegExp(`\\$\\{${n}\\}|\\$${n}(?![\\w])`, 'gi'), () => v);
+    const r = fn(s); if (r) return r;
+  }
+  return null;
+}
+// $NAME · ${NAME} · $env:NAME · %NAME% → 같은 명령에서 정한 값 · 환경 변수(없으면 그대로 — 풀 수 없는 경로로 남는다)
+function expandVars(s, ctx) {
+  const v = name => { const k = String(name).toLowerCase(); if (ctx && ctx.vars && ctx.vars[k] != null) return ctx.vars[k]; const e = Object.keys(process.env).find(x => x.toLowerCase() === k); return e ? process.env[e] : null; };
+  return String(s)
+    .replace(/\$env:([A-Za-z_]\w*)/gi, (m, n) => v(n) != null ? v(n) : m)
+    .replace(/%([A-Za-z_]\w*)%/g, (m, n) => v(n) != null ? v(n) : m)
+    .replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (m, a, b) => { const n = a || b; if (/^pwd$/i.test(n) && ctx && ctx.cwd) return ctx.cwd; if (/^(home|null)$/i.test(n)) return m; return v(n) != null ? v(n) : m; });
+}
 function analyzeCommand(words0, mode, ctx) {
+  if (ctx.worker && rememberVar(words0, ctx)) return null;
   let words = words0.filter(x => x !== '');
   // 앞의 VAR=값 · 리다이렉션 · 래퍼를 벗긴다.
   for (let guard = 0; guard < 10 && words.length; guard++) {
@@ -219,7 +264,7 @@ function analyzeCommand(words0, mode, ctx) {
 
   if (CD.has(p)) {
     const t = args.find(a => !a.startsWith('-'));
-    const to = t ? resolveTarget(ctx.cwd, String(t).replace(/^["']|["']$/g, '')) : null;
+    const to = t ? resolveTarget(ctx.cwd, expandVars(String(t).replace(/^["']|["']$/g, ''), ctx)) : null;
     if (to) ctx.cwd = to; else if (t) ctx.cwdUnknown = true;   // 어디로 갔는지 모른다 — 작업자 모드는 그 뒤 상대 경로를 막는다
     ctx.root = undefined;
     return null;
@@ -233,20 +278,20 @@ function analyzeCommand(words0, mode, ctx) {
   }
   if (PWSH.has(p)) {
     const k = args.findIndex(a => /^[-/](c|co|com|comm|comma|comman|command)$/i.test(a));
-    if (k >= 0) return analyze(args.slice(k + 1).join(' '), { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown });
+    if (k >= 0) return analyze(args.slice(k + 1).join(' '), { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown, vars: ctx.vars, loops: ctx.loops, gitReadOnly: ctx.gitReadOnly });
     const e = args.findIndex(a => /^[-/](e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedcommand)$/i.test(a));
     if (e >= 0 && args[e + 1]) {
       let decoded = '';
       try { decoded = Buffer.from(args[e + 1], 'base64').toString('utf16le'); } catch { decoded = ''; }
-      if (decoded) return analyze(decoded, { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown });
+      if (decoded) return analyze(decoded, { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown, vars: ctx.vars, loops: ctx.loops, gitReadOnly: ctx.gitReadOnly });
     }
     const f = args.find(a => !a.startsWith('-'));
-    if (f && !/\.ps1$/i.test(f)) return analyze(args.filter(a => !/^-/.test(a)).join(' '), { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown });
+    if (f && !/\.ps1$/i.test(f)) return analyze(args.filter(a => !/^-/.test(a)).join(' '), { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown, vars: ctx.vars, loops: ctx.loops, gitReadOnly: ctx.gitReadOnly });
     return null;
   }
   if (p === 'cmd') {
     const k = args.findIndex(a => /^\/[ck]$/i.test(a));
-    if (k >= 0) return analyze(args.slice(k + 1).join(' '), { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown });
+    if (k >= 0) return analyze(args.slice(k + 1).join(' '), { cwd: ctx.cwd, mode: 'ps', depth: ctx.depth + 1, worker: ctx.worker, wtRoot: ctx.wtRoot, mainRoot: ctx.mainRoot, cwdUnknown: ctx.cwdUnknown, vars: ctx.vars, loops: ctx.loops, gitReadOnly: ctx.gitReadOnly });
     return null;
   }
   if (p === 'eval' || p === 'invoke-expression' || p === 'iex') {
@@ -286,6 +331,7 @@ const WHOLE_TREE = new Set(['.', './', '.\\', ':/', ':/.', ':/*', '*', './*', '.
 const REASONS = {
   workerUnresolved: '하네스 작업자는 어디인지 풀 수 없는 경로(변수 · 명령 치환 · 위치를 모르는 cd 뒤의 상대 경로)를 지우거나 쓸 수 없습니다. worktree 안의 구체적인 경로로 적으세요.',
   dockerGlobal: '하네스 작업자는 docker 데몬 전체의 컨테이너 · 이미지 · 볼륨 · 네트워크를 지우거나 멈출 수 없습니다(사용자가 쓰는 서비스일 수 있다). 이 작업의 compose 프로젝트만 docker compose 로 다루세요.',
+  workerGit: '하네스 작업자는 git -C · --git-dir · --work-tree · stash · config 를 읽기로만 쓸 수 있습니다(status · log · diff · show · archive · stash list/show · config --get) — git 상태는 하네스만 바꿉니다.',
   dockerProject: '하네스 작업자는 compose 프로젝트 이름(-p · --project-name)을 바꿀 수 없습니다 — 하네스가 이 작업만의 COMPOSE_PROJECT_NAME 을 줬습니다(메인 체크아웃의 실행 중 컨테이너와 섞이지 않게).',
   outsideWorker: '하네스 작업자는 자기 worktree 밖의 파일 · 폴더를 지우거나 바꿀 수 없습니다(임시 폴더는 된다). worktree 안에서 하세요 — 꼭 필요하면 BLOCKED.md 에 무엇을 왜 해야 하는지 적으세요.',
   // [버그 2026-10-01] AGENTS.md 는 "사용자가 명시한 뒤에만" 이라 적었는데 허락의 길이 없었다 — 좁힌 하네스 명령으로 안내한다.
@@ -504,6 +550,9 @@ function workerTarget(t0, mode, ctx, allowTmp) {
   let t = String(mode === 'ps' && !C.IS_WIN ? t0.replace(/\\/g, '/') : t0).trim().replace(/^["']|["']$/g, '');
   if (!t || /^(\/dev\/null|nul|\$null)$/i.test(t)) return null;
   t = t.replace(/^\$\{?PWD\}?(?=$|[\\/])/i, () => ctx.cwd);
+  const lv = eachLoopValue(t, ctx, s => workerTarget(s, mode, ctx, allowTmp)); if (lv !== undefined) return lv;
+  t = expandVars(t, ctx);
+  if (/^\/tmp(\/|$)/.test(t) && !/(^|[\\/])\.\.([\\/]|$)/.test(t)) return null;   // Git Bash · POSIX 의 /tmp 는 임시 폴더다(Windows 에서 C:\tmp 로 풀면 틀린다)
   const relative = !path.isAbsolute(expandHome(t)) && !/^[a-zA-Z]:/.test(t) && !/^\//.test(t);
   if (relative && ctx.cwdUnknown) return `${REASONS.workerUnresolved} (대상: ${t})`;
   const abs = resolveTarget(ctx.cwd, t);
@@ -524,7 +573,6 @@ function outsideWorktree(targets, mode, ctx) {
 //   한 줄 코드 속 삭제/쓰기 경로 · docker 데몬 전체를 바꾸는 명령(자동 보고 caed67b9a2f1 와 같은 계열).
 const WRITE_CMDLETS = new Set(['set-content', 'sc', 'add-content', 'ac', 'clear-content', 'clc', 'out-file', 'tee', 'tee-object', 'new-item', 'ni']);
 const COPY_MOVE = new Set(['cp', 'copy', 'copy-item', 'cpi', 'mv', 'move', 'move-item', 'mi', 'ren', 'rename-item', 'rni', 'xcopy']);
-const DOCKER_GLOBAL = /^(rm|stop|kill|rmi|restart|pause|prune|container|volume|network|image|system|builder)$/i;
 const valueOf = (args, names) => { const k = args.findIndex(a => names.test(a)); return k >= 0 && args[k + 1] != null ? args[k + 1] : null; };
 // Windows 식 옵션(/Y · /MIR · /XD:…) — '/' 뒤에 영문자만 오고 다른 '/' 가 없다. POSIX 절대 경로(/tmp/x)를 옵션으로 버리지 않게.
 const WIN_OPT = /^\/[A-Za-z]+(:[^/]*)?$/;
@@ -563,16 +611,52 @@ function checkWorker(p, args, words0, mode, ctx) {
     if (/rmSync|rmdirSync|unlinkSync|rimraf|\brm\(|rmtree|os\.remove|os\.unlink|os\.rmdir|\.unlink\(|writeFileSync|appendFileSync|renameSync|shutil\.move|open\([^)]*['"][wa]/.test(code)) {
       for (const m of code.matchAll(/'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|`((?:\\.|[^`\\])*)`/g)) {
         const s = (m[1] != null ? m[1] : m[2] != null ? m[2] : m[3]).replace(/\\(.)/g, '$1');
+        // '/api/ha/status' 같은 URL 경로는 파일이 아니다 — '/' 로 시작하면 맨 위 폴더가 실제로 있을 때만 경로로 본다(2026-10-19 현장 오탐)
+        if (/^\/[^/]/.test(s) && !/^\/tmp(\/|$)/.test(s)) { const top = resolveTarget(ctx.cwd, `/${s.split('/')[1]}`); if (!top || !fs.existsSync(top)) continue; }
         if (/^([a-zA-Z]:[\\/]|\/|~|\.\.)/.test(s)) { const r = workerTarget(s, mode, ctx, true); if (r) return r; }
       }
     }
   }
+  if (p === 'git') { const r = workerGit(args, mode, ctx); if (r) return r; }
   if (p === 'docker' || p === 'docker-compose') {
     const sub = args.find(a => !a.startsWith('-')) || '';
     const compose = p === 'docker-compose' || sub === 'compose';
-    if (compose && args.some(a => /^(-p|--project-name)(=|$)/.test(a))) return REASONS.dockerProject;
-    if (!compose && DOCKER_GLOBAL.test(sub)) return REASONS.dockerGlobal;
+    // -p 는 하네스가 준 이름($COMPOSE_PROJECT_NAME)일 때만 — 다른 이름은 메인 체크아웃의 컨테이너를 덮어쓸 수 있다
+    const pi = args.findIndex(a => /^(-p|--project-name)(=|$)/.test(a));
+    const pv = pi < 0 ? null : (/=/.test(args[pi]) ? args[pi].replace(/^[^=]*=/, '') : String(args[pi + 1] || '')).replace(/^["']|["']$/g, '');
+    if (compose && pi >= 0 && !(/^\$\{?COMPOSE_PROJECT_NAME\}?$|^\$env:COMPOSE_PROJECT_NAME$/i.test(pv) || (process.env.COMPOSE_PROJECT_NAME && pv === process.env.COMPOSE_PROJECT_NAME))) return REASONS.dockerProject;
+    // 지우거나 멈추는 것만 — docker images · network ls · ps 같은 읽기는 그대로(2026-10-19 현장 오탐)
+    const k = args.indexOf(sub), act = (args.slice(k + 1).find(a => !a.startsWith('-')) || '').toLowerCase();
+    if (!compose && (/^(rm|rmi|stop|kill|restart|pause|prune)$/i.test(sub) || (/^(container|volume|network|image|system|builder)$/i.test(sub) && /^(rm|remove|prune|stop|kill|restart|pause|delete|disconnect)$/.test(act)))) return REASONS.dockerGlobal;
   }
+  return null;
+}
+// 작업자 모드의 git -C · --git-dir · --work-tree · stash · config — 권한 deny 대신 여기서 읽기 형태만 통과시킨다(policy.GUARD_GIT).
+//   그 밖의 git 쓰기(commit · reset · checkout …)는 권한 deny 가 그대로 막는다.
+const GIT_READ = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'grep', 'describe', 'cat-file', 'shortlog',
+  'archive', 'rev-list', 'for-each-ref', 'merge-base', 'ls-remote', 'name-rev', 'check-ignore', 'count-objects', 'show-ref', 'cherry', 'range-diff', 'whatchanged', 'version', 'help']);
+function workerGit(args, mode, ctx) {
+  let i = 0, scoped = false;
+  for (; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-C' || a === '--git-dir' || a === '--work-tree') { scoped = true; i++; continue; }
+    if (/^--(git-dir|work-tree)=/.test(a)) { scoped = true; continue; }
+    if (a === '-c' || a === '--namespace') { i++; continue; }
+    if (/^-/.test(a)) continue;
+    break;
+  }
+  const sub = String(args[i] || '').toLowerCase(), rest = args.slice(i + 1);
+  if (sub === 'stash') return /^(list|show)$/.test(rest[0] || '') ? null : REASONS.workerGit;
+  if (sub === 'config') {
+    if (rest.some(a => /^(--(unset|unset-all|add|replace-all|rename-section|remove-section|edit)|-e)$/.test(a))) return REASONS.workerGit;
+    return rest.some(a => /^(--get(-all|-regexp|-urlmatch)?|--list|-l)$/.test(a)) || rest.filter(a => !/^-/.test(a)).length <= 1 ? null : REASONS.workerGit;
+  }
+  if (!scoped && !ctx.gitReadOnly) return null;   // Monitor 명령에는 권한의 git deny 접두가 붙지 않는다 — 거기서는 모든 git 을 읽기만
+  if (sub === 'apply' && rest.some(a => /^--(check|stat|numstat|summary)$/.test(a)) && !rest.some(a => /^--(index|cached|3way)$/.test(a))) return null;
+  // 목록 · 현재 이름만(branch --show-current · branch -a · remote -v · tag -l) — 만들기 · 지우기 · 이름 바꾸기는 아니다
+  if ((sub === 'branch' || sub === 'tag' || sub === 'remote') && (rest.length === 0 || rest.every(a => /^(--show-current|--list|-l|-a|--all|-r|--remotes|-v|-vv|--verbose|--contains|--merged|--no-merged|--sort=.*|--format=.*|--points-at)$/.test(a) || (!/^-/.test(a) && rest.some(b => /^(--list|-l|--contains|--merged|--no-merged|--points-at)$/.test(b)))))) return null;
+  if (!GIT_READ.has(sub)) return REASONS.workerGit;
+  if (sub === 'archive') { const o = valueOf(rest, /^(-o|--output)$/) || (rest.find(a => /^--output=/.test(a)) || '').replace(/^--output=/, ''); if (o) return workerTarget(o, mode, ctx, true); }
   return null;
 }
 function checkDelete(p, args, mode, ctx) {
@@ -658,6 +742,7 @@ function isDangerousTarget(t, ctx) {
   s = s.replace(/([\\/])\*$/, '$1').replace(/([\\/])\.$/, '$1');
   if (s === '*' || s === '.*' || s === '') s = '.';
   s = s.replace(/^\$\{?PWD\}?(?=$|[\\/])/i, () => ctx.cwd);                                     // 셸의 $PWD = 지금 cwd
+  if (ctx.worker) { const lv = eachLoopValue(s, ctx, x => isDangerousTarget(x, ctx)); if (lv !== undefined) return lv; s = expandVars(s, ctx); }   // 같은 명령에서 정한 변수($p = "…") · 반복 변수
   if (/^[a-zA-Z]:[\\/]*$/.test(s)) return true;                                                  // 드라이브 루트(C:\) — 어느 플랫폼에서든 막는다
   const abs = resolveTarget(ctx.cwd, s);
   if (!abs) return unresolvedIsDangerous(s) ? 'unresolved' : false;
@@ -692,9 +777,9 @@ function decide(input, runtime, opts) {
   const c = ti.command != null ? ti.command : ti.cmd;
   const cwd = input.cwd && typeof input.cwd === 'string' ? input.cwd : process.cwd();
   // Codex 는 argv 배열(["powershell","-Command","…"] · ["bash","-lc","…"])로 줄 수 있다 — 이미 쪼개진 단어다.
-  if (Array.isArray(c)) return c.length ? analyzeCommand(c.map(String), modeFor(tool, runtime), { cwd, root: undefined, depth: 0, worker }) : null;
+  if (Array.isArray(c)) return c.length ? analyzeCommand(c.map(String), modeFor(tool, runtime), { cwd, root: undefined, depth: 0, worker, vars: {}, loops: {} }) : null;
   if (typeof c !== 'string' || !c.trim()) return null;
-  return analyze(c, { cwd, mode: modeFor(tool, runtime || C.detectRuntime(input)), worker });
+  return analyze(c, { cwd, mode: modeFor(tool, runtime || C.detectRuntime(input)), worker, gitReadOnly: worker && tool === 'Monitor' });
 }
 
 function main() {

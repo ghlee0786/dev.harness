@@ -31,6 +31,22 @@ const DEFS = [
   [CS, /^\s*(?:(?:public|private|protected|internal|static|async|virtual|sealed|abstract|partial|final|readonly|unsafe|extern|new)\s+)+(?!class\b|interface\b|struct\b|record\b|enum\b|override\b)[\w<>[\],.?]+(?:\s*<[^>]*>)?\s+([A-Za-z_]\w*)\s*\([^;]*$/],
 ];
 const NOT_UNUSED = /^(main|Main|__\w+__|setUp|tearDown|setup|teardown|constructor|render|default)$|^(test|Test)/;
+// [2026-10-19 현장 오탐] 데코레이터 · 어트리뷰트(@router.get · [HttpGet] · @Get())가 붙은 정의는 프레임워크가 이름 없이 부른다.
+//   여러 줄 데코레이터(@router.get(\n "/x",\n))도 — 정의 위로, 같은 들여쓰기의 @ · [ 줄이 나오면 붙은 것. 빈 줄 · 같은 들여쓰기의 다른 문장에서 멈춘다.
+function decorated(lines, n) {
+  const ind = s => /^\s*/.exec(s)[0].length, me = ind(lines[n - 1]);
+  for (let i = n - 2; i >= 0 && i >= n - 12; i--) {
+    const s = lines[i]; if (!s.trim()) return false;
+    const t = s.trim();
+    if (ind(s) > me || /^[)\]}]/.test(t)) continue;
+    if (ind(s) === me && /^(@|\[)/.test(t)) return true;
+    return false;
+  }
+  return false;
+}
+// 억누르기에 사유를 달았다: eslint 의 `-- 사유` · `— 사유` · 뒤따르는 주석 · SuppressMessage 의 Justification
+const REASON = /(\s[—–]\s*|\s--\s+|\s#\s*|\s\/\/\s*|Justification\s*=\s*")[^\s—–#/-]/;
+const reasoned = t => { const m = SUPPRESS.exec(t); return !!m && REASON.test(t.slice(m.index + m[0].length)); };
 const MAX_BYTES = 512 * 1024;
 
 const rel = f => f.replace(/\\/g, '/');
@@ -55,7 +71,7 @@ function find(wt, base, o) {
       const t = lines[n - 1];
       if (!added.has(n)) { flushRun(); continue; }
       const hit = (rule, text) => { if (on(rule)) out.push({ rule, file: f, line: n, text: (text || t.trim()).slice(0, 120) }); };
-      if (SUPPRESS.test(t)) hit('suppress');
+      if (!isTest && SUPPRESS.test(t) && !reasoned(t)) hit('suppress');   // 테스트의 억누르기(# noqa: E402 · @ts-expect-error)는 대개 의도다
       if (isTest) { if (WEAKEN.test(t)) hit('test-weaken'); continue; }
       if (!isCode) continue;
       if (DEBUG.some(([ext, re]) => ext.test(f) && re.test(t))) hit('debug');
@@ -63,7 +79,7 @@ function find(wt, base, o) {
       if (HARD_PATH.test(t) || SECRET.test(t)) hit('hardcoded', t.trim().replace(SECRET, m => `${m.slice(0, 6)}…`));
       const c = commentOf(f, t);
       if (c != null && CODEY.test(c) && !/<\/?\w+[^>]*>/.test(c) && !TODO.test(t) && !SUPPRESS.test(t)) run.push(n); else flushRun();
-      if (on('unused')) for (const [ext, re] of DEFS) { if (!ext.test(f)) continue; const m = re.exec(t); if (m && !NOT_UNUSED.test(m[1]) && !/\boverride\b/.test(t)) { defs.push({ file: f, line: n, name: m[1], text: t }); break; } }
+      if (on('unused')) for (const [ext, re] of DEFS) { if (!ext.test(f)) continue; const m = re.exec(t); if (m && !NOT_UNUSED.test(m[1]) && !/\boverride\b/.test(t) && !decorated(lines, n)) { defs.push({ file: f, line: n, name: m[1], text: t }); break; } }
     }
     flushRun();
   }
