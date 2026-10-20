@@ -17,7 +17,7 @@
 
 ### 큰 작업 · 여러 세션
 - 여러 파일에 걸친 기능 추가 · 수정 요청은 `node harness/cli.js go "<요청 원문>"` 으로 보낸다(`--detach` 로 띄우고 `wait <id>` 로 보고를 받는다 — 셸 안에서 돌리면 셸의 시간 상한에 함께 죽는다). 자기 worktree · 브랜치(`harness/<id>`)에서 끝까지 돌고 보고서를 낸다. 한두 줄 수정 · 질문 · 조사는 그 자리에서 하고, 고친 파일만 커밋한다.
-- 여러 모듈 · 여러 에이전트로 나눠 만들고 시험해야 하는 큰 요청은 `node harness/cli.js factory "<요청 원문>"` — 계획 에이전트가 카드(쓰기 소유 경로 · 의존 · 계약)로 나누고, 카드마다 작업이 병렬로 돌아 통합 브랜치 `harness/factory/<id>` 에 하나씩 합쳐지고, 시험 에이전트들이 나눠 시험한다(`factory status|stop|accept <id>` — accept 는 사용자가 말한 뒤). 동시에 같은 저장소를 고치는 작업은 `go … --owns "<glob>"` 로 바꿀 경로를 정한다.
+- 여러 모듈 · 여러 에이전트로 나눠 만들고 시험해야 하는 큰 요청은 `node harness/cli.js factory "<요청 원문>"` — 계획 에이전트가 카드(쓰기 소유 경로 · 의존 · 계약)로 나누고, 카드마다 작업이 병렬로 돌아 통합 브랜치 `harness/factory/<id>` 에 하나씩 합쳐지고, 시험 에이전트들이 나눠 시험한다(`factory status|stop|accept <id>` — accept 는 사용자가 말한 뒤). 동시에 같은 저장소를 고치는 작업은 `go … --owns "<glob>"` 로 바꿀 경로를 정한다. 대화형 세션에서도 서로 독립적인 일(조사 · 시나리오 시험 · 검토 · 서로 다른 파일)은 서브에이전트로 나눠 한 메시지에서 동시에 띄운다 — 같은 파일을 고치는 일은 나누지 않는다.
 - 사용자가 이미지 · 영상 · 음성 · 문서를 함께 줬으면(붙여 넣은 이미지는 `[Image: source: <경로>]` 로 보인다) 각 파일을 `--attach <경로>` 로 넘긴다 — 영상은 장면 이미지와 전사로, 음성은 전사로 바뀌어 작업자에게 간다.
 - 도는 · 끝난 작업에 요구를 덧붙일 때는 `node harness/cli.js note <id> --file <파일>`(다음 턴에 · 끝난 작업은 resume 때 전달). 실행 중인 작업을 멈출 때는 `node harness/cli.js stop <id>`(셸을 죽이지 않는다) — 진행분을 커밋하고 interrupted 로 바꾼다. 그 뒤 `resume` 또는 `cancel`.
 - 현황 `node harness/cli.js status` · 받아들이기 `accept <id>`(사용자가 말한 뒤) · 취소 `cancel <id>` · 되살리기 `restore <id>` · 정리 `gc`(끝난 작업) · `cleanup-legacy`(이전 하네스 잔여물 — `--apply` 는 사용자가 말한 뒤).
