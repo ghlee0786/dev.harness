@@ -269,6 +269,19 @@ try {
   const r10b = install({ target: t10, source: SOURCE });
   R.check('[RUN] 주인이 죽은 작업은 막지 않는다', r10b.ok !== false && read(path.join(t10, 'harness', 'cli.js')) === cliBefore, r10b.report);
 
+  // ── 예전 템플릿의 CLAUDE.md: 하네스가 넣었던 줄만 새 문구로 · 사용자 줄과 줄바꿈(CRLF)은 그대로 · 두 번째 설치는 무변경
+  //   [2026-10-20 사용자 보고] "서브에이전트는 적게" 지침 때문에 독립적인 시험 · 검토 11개가 하나씩 차례로 돌았다
+  const t11 = mkRepo('legacy-claude');
+  const OLD = ['@AGENTS.md', '', '# Claude Code 전용', '', '- 요청한 범위만 한다. 요청 밖의 리팩터 · 정리 · 기능 추가로 넓히지 않는다.', '- 서브에이전트는 정말 독립적인 큰 일에만, 적게 쓴다.',
+    '- 별도의 검증 단계나 검증용 서브에이전트를 두지 않는다 — 저장소 테스트 명령의 종료 코드가 판정이다.', '- 무언가를 만들거나 고쳐 달라는 큰 요청은 `harness` 스킬을 따른다.', '- 사용자가 더한 줄 — 그대로', ''].join('\r\n');
+  write(path.join(t11, 'CLAUDE.md'), OLD);
+  install({ target: t11, source: SOURCE });
+  const c11 = read(path.join(t11, 'CLAUDE.md')), tpl = read(path.join(SOURCE, 'template', 'CLAUDE.md')).split(/\r?\n/);
+  R.check('[CLAUDE 이전] 예전 지침 두 줄 → 새 문구(동시에 띄움 · 판정은 테스트 종료 코드) · 사용자 줄 · CRLF 유지',
+    !/적게 쓴다|검증용 서브에이전트를 두지 않는다/.test(c11) && c11.includes(tpl[5]) && c11.includes(tpl[6]) && /한 메시지에서 동시에/.test(c11) && c11.includes('- 사용자가 더한 줄 — 그대로\r\n') && !/[^\r]\n/.test(c11), JSON.stringify(c11).slice(0, 400));
+  const c11b = (install({ target: t11, source: SOURCE }), read(path.join(t11, 'CLAUDE.md')));
+  R.check('[CLAUDE 이전] 두 번째 설치는 CLAUDE.md 를 바꾸지 않는다', c11b === c11);
+
   R.check('[격리] 전역 CODEX_HOME/hooks.json 은 바이트 그대로 · 다른 파일 없음', read(path.join(codexHome, 'hooks.json')) === GLOBAL_HOOKS && fs.readdirSync(codexHome).length === 1);
   R.check('[격리] 가짜 HOME 에 .claude · .agents 가 생기지 않았다', !fs.existsSync(path.join(home, '.claude')) && !fs.existsSync(path.join(home, '.agents')));
 } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 800)); }
