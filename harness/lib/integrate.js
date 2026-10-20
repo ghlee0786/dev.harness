@@ -238,6 +238,16 @@ async function accept(o) {
     archivePlan(root, task, P);
 
     // 2. 대상 브랜치를 가져와 최신화(충돌 → 같은 세션이 푼다 · 예산 안에서만) → 검사
+    const checkHere = async (why) => {
+      const j = (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
+      task.checks.last = K.brief(j);
+      const v = K.judge(j, task.checks.baseline, { notWorse: task.checks.source !== 'user' });
+      S.log(root, task.id, { event: 'checks', phase: 'accept', why, verdict: v.verdict, pass: j.pass, fail: j.fail });
+      if (v.verdict !== 'fail') return null;
+      commitInto(task, P.wt, 'checks after bringing target up to date');
+      S.writeTask(root, task);
+      return refused(task, `checks fail after bringing ${target} into ${task.branch} (${j.fail} failing) — the task branch now contains ${target}; resume or fix it, then accept again`);
+    };
     let rounds = 0;
     for (let pass = 0; pass < 2 && !G.isAncestor(root, target, task.branch); pass++) {
       broughtTarget = true;
@@ -250,17 +260,13 @@ async function accept(o) {
         rounds += res.rounds;
       } else task.commits.push(G.headSha(P.wt));
       S.log(root, task.id, { event: 'target_merged', target, rounds });
-      if (task.checks.commands.length) {
-        const j = (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
-        task.checks.last = K.brief(j);
-        const v = K.judge(j, task.checks.baseline, { notWorse: task.checks.source !== 'user' });
-        S.log(root, task.id, { event: 'checks', phase: 'accept', verdict: v.verdict, pass: j.pass, fail: j.fail });
-        if (v.verdict === 'fail') {
-          commitInto(task, P.wt, 'checks after bringing target up to date');
-          S.writeTask(root, task);
-          return refused(task, `checks fail after bringing ${target} into ${task.branch} (${j.fail} failing) — the task branch now contains ${target}; resume or fix it, then accept again`);
-        }
-      }
+      if (task.checks.commands.length) { const no = await checkHere('target brought in'); if (no) return no; }
+    }
+    // 대상 브랜치를 새로 들이지 않았어도, 마지막으로 기록된 검사가 실패면 다시 잰다 — [2026-10-20 실측 · 작업 수치에서 발견]
+    //   위에서 거절된 작업을 다시 accept 하면 이미 들인 상태라 위 고리를 건너뛰어 검사 없이 병합됐다(실패 0 → 133 인 채로 사용자 브랜치에).
+    //   --force(사용자가 실패를 알고 병합)면 다시 재지 않는다.
+    if (!broughtTarget && !o.force && task.checks.commands.length && task.checks.last && K.judge(task.checks.last, task.checks.baseline, { notWorse: task.checks.source !== 'user' }).verdict === 'fail') {
+      const no = await checkHere('last recorded checks failed'); if (no) return no;
     }
     // 린트 — 대상 브랜치를 들인 뒤에도 작업이 바꾼 파일에서 다시 본다(루프에서 통과했어도 그 뒤의 커밋 · 대상 브랜치가 깨뜨릴 수 있다).
     //   [2026-10-14 자동 이슈 #3] 새로 만든 worktree 는 빌드 · 복원 산출물이 없어(--no-restore 린트) 루프에서 통과한 린트가 거절됐다.

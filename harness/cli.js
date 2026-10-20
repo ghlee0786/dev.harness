@@ -25,6 +25,7 @@ const USAGE = `usage:
       --detach (go · resume): return the id at once instead of waiting · --foreground: run in this process (the old way)
   node harness/cli.js wait <id> [--timeout-min N]   (waits until the task is no longer running, then prints its report · exit 3 if still running at the limit)
   node harness/cli.js status [--json]
+  node harness/cli.js metrics [--roots "<저장소>;<저장소>…"] [--since YYYY-MM-DD] [--jsonl <out>] [--md <out>] [--json]   (작업 수치 — 비용 · 효율 · 계획 · 시험 · 찌꺼기 · 품질)
   node harness/cli.js accept <id> [--into <branch>] [--force] [--budget-usd N]   (only after the user accepts the result; --force for tasks not 'done')
   node harness/cli.js cancel <id> [--skip-checks]
   node harness/cli.js restore <id> [--skip-checks]
@@ -48,7 +49,7 @@ const USAGE = `usage:
 defaults: runtime claude · model opus · budget $20 · wall 120 min · max continuations 8 (with --runtime codex and no --model: Codex's own default model)`;
 
 const VALUE = new Set(['--check', '--runtime', '--model', '--effort', '--budget-usd', '--token-budget', '--wall-min', '--max-continuations', '--root', '--into', '--base', '--target', '--check-timeout-min', '--goal-file',
-  '--jobs', '--test-agents', '--waves', '--max-cards', '--card-budget-usd', '--request-file', '--owns', '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--tag', '--timeout-min', '--file', '--note', '--note-file']);
+  '--jobs', '--test-agents', '--waves', '--max-cards', '--card-budget-usd', '--request-file', '--owns', '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--roots', '--since', '--jsonl', '--md', '--tag', '--timeout-min', '--file', '--note', '--note-file']);
 const FLAGS = new Set(['--no-verify', '--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs', '--detach', '--foreground']);
 
 function parse(argv) {
@@ -170,6 +171,19 @@ async function main(argv, io) {
       out(o.json ? JSON.stringify(r, null, 2) : Lg.format(r));
       return r.ok ? 0 : 1;
     } catch (e) { err(`harness cleanup-legacy: ${e.message}`); return 1; }
+  }
+  // metrics — 작업 기록(지난 작업 포함)에서 수치를 계산해 프로젝트별로 비교한다. --roots 로 여러 저장소를 한 번에(이 PC 안에서만 읽는다).
+  if (cmd === 'metrics') {
+    const Mt = require('./lib/metrics');
+    try {
+      const roots = o.roots ? String(o.roots).split(';').map(x => x.trim()).filter(Boolean) : [root];
+      const cols = roots.map(r => Mt.collect(path.resolve(r), { since: o.since }));
+      if (o.jsonl) fs.writeFileSync(path.resolve(o.jsonl), cols.flatMap(c => [...c.tasks.map(t => JSON.stringify({ kind: 'task', ...t })), ...c.factories.map(x => JSON.stringify({ kind: 'factory', ...x }))]).join('\n') + '\n');
+      const md = Mt.toMarkdown(cols);
+      if (o.md) fs.writeFileSync(path.resolve(o.md), md);
+      out(o.json ? JSON.stringify(cols.map(Mt.summarize), null, 2) : md);
+      return 0;
+    } catch (e) { err(`harness metrics: ${e.message}`); return 1; }
   }
   if (cmd === 'status' || cmd === 'gc') {
     const St = require('./lib/status');

@@ -541,7 +541,8 @@ async function loop(c, kind) {
 }
 
 // ── 끝 ─────────────────────────────────────────────────────────────────
-const isTestFile = f => TEST_FILE_RE.test(f);
+// 하네스 자신의 기록(.harness/<id>/logs/…Tests.txt)은 시험 파일이 아니다 — [2026-10-20 실측] 추가한 테스트로 잘못 세어 보고 · 수치가 부풀었다
+const isTestFile = f => !/^\.harness\//.test(f) && TEST_FILE_RE.test(f);
 function outsideGit(task, wt) {
   const untracked = G.statusEntries(wt).filter(e => e.code === '??').map(e => e.path);
   return { ignored_changed: G.ignoredChanges(wt, task.worktree_include || []), untracked_left: untracked };

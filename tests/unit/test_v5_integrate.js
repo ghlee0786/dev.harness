@@ -320,6 +320,11 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     const a19 = await I.accept({ ...quiet, root: r19, id: t19.id });
     R.check('[IN-19] accept 의 검사는 작업의 검사 상한(1.5초)을 쓴다 — 4초 걸리는 검사는 시간 초과로 거절',
       t19.status === 'done' && a19.refused && /checks fail after bringing main/.test(a19.reason), `${t19.status} · ${a19.status} · ${a19.reason}`);
+    // [2026-10-20 실측 · 작업 수치에서 발견] 거절 뒤 다시 accept 하면 이미 대상 브랜치를 들인 상태라 검사를 건너뛰어 실패 0 → 133 인 채로 병합됐다
+    const main19 = git(r19, ['rev-parse', 'main']);
+    const a19b = await I.accept({ ...quiet, root: r19, id: t19.id });
+    R.check('[IN-19b] 검사 실패로 거절된 작업을 다시 accept 해도 검사를 다시 돌려 거절한다 — main 은 그대로',
+      a19b.refused === true && /checks fail/.test(a19b.reason) && git(r19, ['rev-parse', 'main']) === main19, `${a19b.status} · ${a19b.refused} · ${a19b.reason}`);
 
     // ── accept 도 린트를 다시 본다 — 대상 브랜치를 들인 뒤 린트가 깨지면 병합하지 않는다 ──
     const LINT = "const fs=require('fs');const bad=process.argv.slice(2).filter(f=>fs.existsSync(f)&&/TODO-SLOP/.test(fs.readFileSync(f,'utf8')));if(bad.length){console.log(bad.join(',')+': slop');process.exit(1)}";
