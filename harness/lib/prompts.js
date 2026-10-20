@@ -96,6 +96,13 @@ function lintFailMessage(t, r, excerpt, deadlineMs) {
     `Fix the code so the lint passes (do not disable rules or add ignore comments), keep .harness/${t.id}/PLAN.md current, and end your turn. If it cannot be done, write .harness/${t.id}/BLOCKED.md with the reason.`].join('\n\n');
 }
 
+// 저장소가 설정한 린터를 미리 알린다(repolint.js) — 품질 검사가 돌려보내기 전에 지키게. quality: off · quality_off: [repo-lint] 면 없다.
+function repoLintLines(t) {
+  const q = (t.checks && t.checks.quality) || {};
+  if (!t.worktree || q.on === false || (q.off || []).includes('repo-lint')) return [];
+  let line = null; try { line = require('./repolint').promptLine(t.worktree); } catch { /* 린터 감지 실패는 안내를 빼고 간다 */ }
+  return line ? [`- ${line}`] : [];
+}
 function taskPrompt(t, o) {
   const rel = `.harness/${t.id}`;
   const docs = docsLines(t, o && o.root);
@@ -113,6 +120,7 @@ function taskPrompt(t, o) {
     '- Do not run git commands that write (commit, checkout, reset, merge, stash, branch). The harness commits after every turn.',
     // [2026-10-13 영상 "쓰레기 코드 없애는 법"] AI 는 더하기 기계다 — 덜 쓰게 한다(효과는 평가로 잰다: 숨은 검사 통과율 · 추가 줄 수).
     '- Write the least code that meets the goal: no features, options or abstractions the goal did not ask for; prefer the standard library and the project\'s existing helpers to hand-written ones; change only the lines the goal needs (match the existing style, do not reformat or refactor unrelated code); remove only what your own change made unused.',
+    ...repoLintLines(t),
     '- End with a short report: the result first, then the commands you ran to verify it and their results.',
     ...permissionLines(t), '',
     '# Checks', ...checksLines(t.checks), ...lintLines(t.checks)].join('\n');
@@ -144,6 +152,7 @@ const QUALITY_HOW = {
   'test-weaken': 'do not skip, focus (.only) or neuter tests — make them pass',
   hardcoded: 'use configuration, environment variables or paths relative to the repository; never commit secrets',
   'format-only': 'revert whitespace/indentation-only changes in files the goal does not need',
+  'repo-lint': 'fix these new violations of the repository\'s own lint rules in the lines you added (wrap long lines and comments; do not disable rules or touch lines you did not change)',
 };
 function qualityMessage(t, dups, findings, deadlineMs) {
   const L = ['The checks pass, but the harness quality rules found problems in the lines you added. Fix them (one pass — the harness will not send these back again):'];

@@ -33,6 +33,18 @@ const PACKS = [
     detect: names => ['pyproject.toml', 'pytest.ini', 'setup.py', 'requirements.txt', 'tox.ini'].some(n => names.includes(n)),
     test: root => exists(root, 'pytest.ini') || /^\s*\[tool\.pytest/m.test(readText(root, 'pyproject.toml')) || /^\s*\[(tool:)?pytest\]/m.test(readText(root, 'setup.cfg') + '\n' + readText(root, 'tox.ini'))
       ? { commands: [['python', '-m', 'pytest']], from: 'pytest' } : null,
+    // 멈춘 테스트 떼어 내기(checks.isolateHangs) — 출력이 멈춘 자리의 테스트를 --deselect 로 뺀다. -q 출력이면 먼저 -v 로 다시 돌려 이름을 얻는다.
+    //   병렬(-n · xdist)은 출력 순서가 달라 멈춘 테스트를 짚을 수 없다 — 건드리지 않는다.
+    hang: {
+      applies: argv => (/(^|[\\/])py\.?test(\.exe)?$/i.test(argv[0]) || (/(^|[\\/])(python[\d.]*|py)(\.exe)?$/i.test(argv[0]) && argv[1] === '-m' && argv[2] === 'pytest'))
+        && !argv.some(a => /^(-n|--numprocesses|--dist)(=|$)|^-n\d/.test(a)),
+      next: (argv, output) => {
+        const lines = String(output || '').split(/\r?\n/).map(l => l.replace(/\s+$/, '')).filter(Boolean), last = lines[lines.length - 1] || '';
+        const id = /^(\S+\.py::\S+)$/.exec(last);
+        if (id) return { argv: [...argv, '--deselect', id[1]], exclude: id[1] };
+        if (/^\S+\.py [.FEsxX]*$/.test(last) && !argv.some(a => /^(-v+|--verbose)$/.test(a))) return { argv: [...argv, '-v'] };
+        return null;
+      } },
     debug: [/\bbreakpoint\(\)|\b(i?pdb)\.set_trace\(/],
     weaken: [/@pytest\.mark\.(skip|xfail)|\bpytest\.skip\(|^\s*assert\s+True\s*$/],
     defs: [/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/, /^\s*class\s+([A-Za-z_]\w*)/],
@@ -96,6 +108,8 @@ function testCommand(root) {
   return null;
 }
 const packOf = file => PACKS.find(p => p.exts.test(file)) || null;
+// 이 검사 명령(argv)의 멈춘 테스트를 떼어 낼 줄 아는 팩 — 셸 문자열(argv 길이 1 · 공백)은 고칠 수 없으니 없음
+const hangFor = argv => (Array.isArray(argv) && argv.length && !(argv.length === 1 && /\s/.test(argv[0])) ? (PACKS.find(p => p.hang && p.hang.applies(argv)) || {}).hang || null : null);
 const allowFor = ids => [...new Set(ids.flatMap(id => (byId.get(id) || { allow: [] }).allow))];
 const debugFor = file => (packOf(file) || { debug: [] }).debug;
 const defsFor = file => (packOf(file) || { defs: [] }).defs;
@@ -123,4 +137,4 @@ function parseSummary(s) {
   return null;
 }
 
-module.exports = { PACKS, detect, testCommand, packOf, allowFor, debugFor, defsFor, commentOf, WEAKEN, parseSummary, byId };
+module.exports = { PACKS, detect, testCommand, packOf, hangFor, allowFor, debugFor, defsFor, commentOf, WEAKEN, parseSummary, byId };

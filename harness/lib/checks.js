@@ -270,23 +270,29 @@ function spawnSpec(argv, forceShell) {
   return { cmd: argv[0], args: argv.slice(1), shell: false };
 }
 
+// 출력이 이만큼 멈추면 멈춘 것으로 본다 — 멈춘 테스트를 떼어 낼 줄 아는 러너(언어 팩 hang)에만. o.stallMs: 0 이면 끔.
+const STALL_MS = Number(process.env.HARNESS_CHECK_STALL_MS) || 5 * 60 * 1000;   // 환경 값은 테스트용
 function runCheck(cwd, argv, o) {
   const timeoutMs = Math.max(1000, (o && o.timeoutMs) || CHECK_TIMEOUT_MS);
   const opt = o || {};
+  const stallMs = opt.stallMs != null ? opt.stallMs : (require('./langs').hangFor(argv) ? STALL_MS : 0);
   return new Promise(resolve => {
     const t0 = Date.now(), spec = spawnSpec(argv, opt.shell);
-    let out = '', total = 0, tail = '', timedOut = false, done = false, child, timer;
-    const push = b => { total += b.length; const s = b.toString('utf8'); if (out.length < CAP) out += s; else tail = (tail + s).slice(-CAP); };
+    let out = '', total = 0, tail = '', timedOut = false, stalled = false, done = false, child, timer, stallTimer;
+    const stop = why => { if (done || timedOut) return; timedOut = true; stalled = why === 'stall'; killTree(child.pid); setTimeout(() => finish(null), 5000).unref(); };
+    const arm = () => { if (!stallMs) return; clearTimeout(stallTimer); stallTimer = setTimeout(() => stop('stall'), stallMs); };
+    const push = b => { arm(); total += b.length; const s = b.toString('utf8'); if (out.length < CAP) out += s; else tail = (tail + s).slice(-CAP); };
     const finish = (code, err) => {
-      if (done) return; done = true; clearTimeout(timer);
+      if (done) return; done = true; clearTimeout(timer); clearTimeout(stallTimer);
       const output = out + (tail ? `\n…[${total - out.length - tail.length} bytes omitted]…\n` + tail : '') + (err ? `\n[spawn error] ${err}` : '');
       const s = parseSummary(output);
       const ok = code === 0 && !timedOut && !(s.found && s.fail > 0);
-      resolve({ command: opt.label || display(argv), argv, exit_code: code, timed_out: timedOut, found: s.found, pass: s.found ? s.pass : (ok ? 1 : 0), fail: s.found ? s.fail : (ok ? 0 : 1), ok, output, ms: Date.now() - t0 });
+      resolve({ command: opt.label || display(argv), argv, exit_code: code, timed_out: timedOut, ...(stalled ? { stalled: true } : {}), found: s.found, pass: s.found ? s.pass : (ok ? 1 : 0), fail: s.found ? s.fail : (ok ? 0 : 1), ok, output, ms: Date.now() - t0 });
     };
     try { child = spawn(spec.cmd, spec.args, { cwd, env: { ...childEnv(opt.bin), ...require('./proc').isolationEnv(cwd) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: spec.shell, detached: !IS_WIN }); }
     catch (e) { return finish(null, e.message); }
-    timer = setTimeout(() => { timedOut = true; killTree(child.pid); setTimeout(() => finish(null), 5000).unref(); }, timeoutMs);
+    timer = setTimeout(() => stop('timeout'), timeoutMs);
+    arm();
     child.stdout.on('data', push); child.stderr.on('data', push);
     child.on('error', e => finish(null, e.message));
     child.on('close', code => finish(code));
@@ -323,6 +329,25 @@ async function runJudged(cwd, commands, o) {
   const results = first.results.slice(), flaky = [];
   idx.forEach((i, k) => { results[i] = again.results[k]; if (again.results[k].ok) flaky.push(first.results[i].command); });
   return { judged: summarize(results), flaky };
+}
+// 멈춘 테스트 떼어 내기 — 기준선에서 시간 초과된 검사의 멈춘 테스트를 언어 팩이 짚어 빼고 다시 돌린다(최대 4번).
+//   [2026-10-20 실측 · 음성 비서 Python 저장소] 오디오 장치를 기다리는 테스트 하나가 2% 지점에서 영원히 멈춰, 전체 pytest 가 매번 15분 상한에 걸렸다 —
+//   찾은 검사는 버려져 검사 없이 돌았고, 사용자가 준 검사였다면 작업이 끝날 수 없었다. 뺀 테스트는 보고서에 남긴다(조용히 빼지 않는다).
+//   → { argv, excluded: [테스트], result } · 떼어 낼 수 없으면 null
+async function isolateHangs(cwd, argv, o) {
+  const hang = (o && o.hang) || require('./langs').hangFor(argv);   // o.hang: 테스트가 끼우는 가짜 러너
+  if (!hang) return null;
+  let cur = argv.slice();
+  const excluded = [];
+  for (let i = 0; i < 4; i++) {
+    const r = await runCheck(cwd, cur, { ...o, stallMs: o && o.stallMs != null ? o.stallMs : STALL_MS });
+    if (!r.timed_out) return excluded.length ? { argv: cur, excluded, result: r } : null;
+    const step = hang.next(cur, r.output);
+    if (!step) return null;
+    if (step.exclude) excluded.push(step.exclude);
+    cur = step.argv;
+  }
+  return null;
 }
 function summarize(results) {
   return { ok: results.every(r => r.ok), pass: results.reduce((a, r) => a + r.pass, 0), fail: results.reduce((a, r) => a + r.fail, 0), results };
@@ -391,5 +416,5 @@ function failureExcerpt(judged) {
 }
 
 module.exports = { lintArgv, yamlNumber, yamlString, yamlList, yamlListOf, spawnSpec, DEFAULT_ALLOW, NEVER_ALLOW, CHECK_TIMEOUT_MS, splitCommand, display, isShellString, discover, repoKinds, allowCommands, programName, parseSummary,
-  runCheck, runAll, runJudged, summarize, brief, judge, worseThan, signature, firstAssertion, failureExcerpt, clip, killTree, childEnv,
+  runCheck, runAll, runJudged, isolateHangs, STALL_MS, summarize, brief, judge, worseThan, signature, firstAssertion, failureExcerpt, clip, killTree, childEnv,
   definitions, commandsForJudge, checksModified, isNpmTest, npmTestScript, yamlTestCommandOf };

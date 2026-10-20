@@ -115,9 +115,26 @@ async function go(o) {
       const cacheFile = path.join(S.paths(root).harnessDir, 'baseline-cache', `${cacheKey}.json`);
       let b = null;
       if (!o.freshBaseline) { try { b = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch { b = null; } }
-      if (b) { log(`[harness] ${id} — baseline reused from an earlier task on the same base commit (--fresh-baseline to rerun)`); task.checks.baseline_cached = true; }
-      else {
+      if (b) {
+        log(`[harness] ${id} — baseline reused from an earlier task on the same base commit (--fresh-baseline to rerun)`); task.checks.baseline_cached = true;
+        if (b.commands) { found.commands = b.commands; task.checks.commands = b.commands; task.checks.hung = b.hung; }
+      } else {
         b = (await K.runJudged(P.wt, found.commands, { timeoutMs: o.checkTimeoutMs, rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
+        // 멈춘 테스트 떼어 내기(K.isolateHangs) — 시간 초과된 검사 가운데 언어 팩이 멈춘 테스트를 짚을 수 있는 것은 그 테스트를 빼고 다시 잰다. 사용자가 준 검사도.
+        const hung = [];
+        for (let i = 0; i < b.results.length; i++) {
+          if (!b.results[i].timed_out) continue;
+          const iso = await K.isolateHangs(P.wt, found.commands[i], { timeoutMs: o.checkTimeoutMs });
+          if (!iso) continue;
+          hung.push(...iso.excluded.map(t => ({ command: K.display(found.commands[i]), test: t })));
+          found.commands = found.commands.map((c, k) => (k === i ? iso.argv : c));
+          b.results[i] = iso.result;
+        }
+        if (hung.length) {
+          b = { ...K.summarize(b.results), commands: found.commands, hung };
+          task.checks.commands = found.commands; task.checks.hung = hung;
+          log(`[harness] ${id} — excluded tests that hung before the task (no output for ${Math.round(K.STALL_MS / 60000)} min): ${hung.map(h => h.test).join(' ; ')}`);
+        }
         const slim = { ...b, results: (b.results || []).map(r => ({ ...r, output: undefined })) };
         try { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(slim)); } catch { /* 캐시 실패는 작업을 멈추지 않는다 */ }
       }
@@ -684,6 +701,7 @@ function summaryKo(task) {
   const qLeft = ch.quality && ch.quality.on !== false ? (ch.quality.last || []) : [];
   if (qLeft.length) warn.push(`품질 규칙에 남은 것(한 번 돌려보냈다): ${qualitySummary(qLeft, 'ko')}`);
   if (dupLeft.length) warn.push(`새 코드에 중복 ${dupLeft.length}곳이 남았다(한 번 돌려보냈다) — ${dupLeft.slice(0, 3).map(b => `${b.file}:${b.start}-${b.end} ↔ ${b.other}`).join(' · ')}`);
+  if ((ch.hung || []).length) warn.push(`작업 전부터 멈추는 테스트 ${ch.hung.length}개를 검사에서 뺐다(${ch.hung.map(h => h.test).join(' ; ')}) — 이 테스트는 이 작업을 판정하지 않았다`);
   if ((ch.dropped || []).length) warn.push(`작업 전부터 시간 초과라 판정에서 뺐다(${ch.dropped.map(d => d.command).join(' ; ')}) — 이 검사는 이 작업을 판정하지 않았다`);
   if ((ch.flaky || []).length) warn.push(`불안정한 검사가 있다(${ch.flaky.length}개) — 다시 돌리면 통과한다`);
   if (ch.lint && ch.lint.last && !ch.lint.last.ok) warn.push('린트가 실패한 채 끝났다(작업 전부터 빨간 저장소 전체 린트)');
@@ -747,6 +765,7 @@ function reportKo(task, P) {
     const cm = task.checks_modified || [];
     L.push(`작업이 고친 검사 정의: ${cm.length ? `${cm.join(', ')} — 확인하세요. 검사가 바뀌면 일을 하지 않고도 통과할 수 있다` : '없음'}`);
   }
+  if ((ch.hung || []).length) L.push(`검사에서 뺀 테스트(작업 전부터 출력 없이 멈춤): ${ch.hung.map(h => h.test).join(' ; ')}`);
   if ((ch.dropped || []).length) L.push(`판정에서 뺀 검사(저장소에서 찾은 것 · 작업 전부터 시간 초과 — 새 worktree 의 환경 문제일 수 있다): ${ch.dropped.map(d => d.command).join(' ; ')}`);
   if (ch.lint) L.push(`린트: ${lintState(ch.lint, 'ko')}`);
   if (ch.quality && ch.quality.on !== false) L.push(`품질 검사(하네스 내장 린트): ${(ch.quality.last || []).length ? qualitySummary(ch.quality.last, 'ko') + ' — ' + ch.quality.last.slice(0, 8).map(x => `${x.file}${x.line ? ':' + x.line : ''} ${x.text}`).join(' · ') : '걸린 것 없음'}${ch.quality.sent ? ' (작업자에게 한 번 돌려보냈다)' : ''}`);
@@ -809,6 +828,7 @@ function report(task, P) {
     const cm = task.checks_modified || [];
     lines.push(`check definitions modified by the task: ${cm.length ? `${cm.join(', ')} — review these; a changed check can pass without the work being done` : 'none'}`);
   }
+  if ((ch.hung || []).length) lines.push(`tests excluded from the checks (hung with no output before the task): ${ch.hung.map(h => h.test).join(' ; ')}`);
   if ((ch.dropped || []).length) lines.push(`checks dropped (auto-detected, timed out before the task — likely the new worktree's environment): ${ch.dropped.map(d => d.command).join(' ; ')}`);
   if (ch.lint) lines.push(`lint: ${lintState(ch.lint, 'en')}`);
   if (ch.quality && ch.quality.on !== false) lines.push(`quality checks (built-in lint): ${(ch.quality.last || []).length ? qualitySummary(ch.quality.last, 'en') + ' — ' + ch.quality.last.slice(0, 8).map(x => `${x.file}${x.line ? ':' + x.line : ''} ${x.text}`).join(' · ') : 'nothing found'}${ch.quality.sent ? ' (sent back to the worker once)' : ''}`);

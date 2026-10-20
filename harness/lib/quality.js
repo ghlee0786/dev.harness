@@ -5,9 +5,10 @@
 //   정책: 기존 코드의 옛 흔적은 보지 않는다(새로 더한 줄만). 루프가 걸린 것을 모아 작업자에게 한 번만 돌려보내고, 남으면 막지 않고 보고한다.
 //   끄기: 프로젝트 블록 quality: off(전부) · quality_off: ["debug", …](규칙별).
 const fs = require('node:fs'), path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const G = require('./git'), D = require('./dup');
 
-const RULES = ['unused', 'debug', 'todo', 'commented', 'suppress', 'test-weaken', 'hardcoded', 'format-only'];
+const RULES = ['unused', 'debug', 'todo', 'commented', 'suppress', 'test-weaken', 'hardcoded', 'format-only', 'repo-lint'];
 const CONF_EXT = /\.(csproj|vbproj|fsproj|props|targets|json|ya?ml|toml|ini|cfg|config|xml|xaml)$/i;
 // 언어별 패턴(디버그 흔적 · 테스트 약화 · 안 쓰는 정의 · 주석)은 언어 팩(langs.js)에 — 여기는 언어와 무관한 것만(PRD R5)
 const Langs = require('./langs');
@@ -92,11 +93,16 @@ function find(wt, base, o) {
       if (!(ws.get(f) > 0)) out.push({ rule: 'format-only', file: f, line: 0, text: '공백 · 들여쓰기만 바뀌었다' });
     }
   }
+  // 저장소 린트: 저장소가 설정한 린터로 새로 생긴 위반(repolint.js) — 작업 전 내용은 git show 그대로(끝 줄바꿈을 지우지 않게)
+  if (on('repo-lint')) {
+    const baseText = f => { const r = spawnSync('git', ['show', `${base}:${f}`], { cwd: wt, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, timeout: 30000 }); return r.status === 0 ? r.stdout : null; };
+    try { out.push(...require('./repolint').find(wt, changed.filter(f => D.CODE_EXT.test(f)), amap, baseText, o && o.repoLint)); } catch { /* 린터 실패는 품질 검사를 막지 않는다 */ }
+  }
   return out.slice(0, 40);
 }
 
 // 규칙 이름 → 사람이 읽는 이름(보고 · 지시)
-const LABEL_KO = { dup: '중복', unused: '쓰이지 않는 새 정의', debug: '디버그 흔적', todo: '남긴 할 일', commented: '주석 처리된 코드', suppress: '검사 억누르기', 'test-weaken': '테스트 약화', hardcoded: '하드코딩(개인 경로 · 비밀)', 'format-only': '형식만 바뀐 파일' };
-const LABEL_EN = { dup: 'duplicate code', unused: 'new definitions nothing uses', debug: 'debug leftovers', todo: 'TODO/FIXME left behind', commented: 'commented-out code', suppress: 'lint/type checks suppressed', 'test-weaken': 'tests weakened (skip/only/always-true)', hardcoded: 'hard-coded personal paths or secrets', 'format-only': 'files with only whitespace/indentation changes' };
+const LABEL_KO = { dup: '중복', unused: '쓰이지 않는 새 정의', debug: '디버그 흔적', todo: '남긴 할 일', commented: '주석 처리된 코드', suppress: '검사 억누르기', 'test-weaken': '테스트 약화', hardcoded: '하드코딩(개인 경로 · 비밀)', 'format-only': '형식만 바뀐 파일', 'repo-lint': '저장소 린트의 새 위반' };
+const LABEL_EN = { dup: 'duplicate code', unused: 'new definitions nothing uses', debug: 'debug leftovers', todo: 'TODO/FIXME left behind', commented: 'commented-out code', suppress: 'lint/type checks suppressed', 'test-weaken': 'tests weakened (skip/only/always-true)', hardcoded: 'hard-coded personal paths or secrets', 'format-only': 'files with only whitespace/indentation changes', 'repo-lint': 'new violations of the repository\'s own linter' };
 
 module.exports = { find, RULES, LABEL_KO, LABEL_EN };
