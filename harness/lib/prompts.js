@@ -8,7 +8,7 @@ const AUTONOMY = [
   // [2026-10-16 자동 보고 00b4667cbf35] "이번 작업에서 만들지 않은 파일은 지우지 말라" 가 앞 작업 파일의 이름 바꾸기를 막아 어색한 결과를 남겼다.
   //   worktree 안의 삭제 · 이름 바꾸기는 하네스가 턴마다 커밋하므로 되돌릴 수 있다 — 되돌릴 수 없는 것은 worktree 밖(guard 가 막는다).
   // [2026-10-17 자동 보고 caed67b9a2f1] 작업자가 worktree 의 compose 로 사용자의 실행 중 컨테이너를 다시 만들어 서비스가 멈췄다.
-  'Do not stop, restart or recreate the running services, containers or processes of the main checkout — they are in use. If you need to run services, start your own (the harness gives this worktree its own COMPOSE_PROJECT_NAME) and stop them when you are done.',
+  'Do not stop, restart or recreate the running services, containers or processes of the main checkout — they are in use. If you need to run services, start your own (the harness gives this worktree its own COMPOSE_PROJECT_NAME; name containers you start with `docker run` with that prefix, e.g. `--name $COMPOSE_PROJECT_NAME-pg`) and remove them when you are done — the harness also removes anything left with that name when the task ends.',
   'Irreversible actions are forbidden: no git push, no merging or resetting branches, and no deleting anything outside this worktree. Deleting or renaming files inside this worktree is fine when the goal needs it (including files earlier tasks created) — the harness commits after every turn, so it can be undone.',
   // [2026-10-20 PRD R1] 시험 뒤 쓰레기 — 하네스가 회수할 수 있는 곳에만 만든다
   'Leave no garbage: put scratch files in $TEMP (TEMP · TMP · TMPDIR — this task\'s own folder, deleted by the harness), and name or prefix any test data you create outside the worktree (databases, schemas, queues, caches, buckets) with $HARNESS_DATA_NS so it can be cleaned up.',

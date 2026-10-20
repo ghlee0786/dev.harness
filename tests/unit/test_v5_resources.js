@@ -31,8 +31,9 @@ function fakeDocker(state) {
     calls.push([cmd, ...args].join(' '));
     if (args[0] === 'version') return { code: state.up ? 0 : 1, out: state.up ? '27.0' : '', err: state.up ? '' : 'Cannot connect' };
     const kind = args[0] === 'ps' ? 'containers' : args[0] === 'images' ? 'images' : `${args[0]}s`;
+    if (args[0] === 'ps' && args.some(a => /^name=/.test(a))) return { code: 0, out: (state.named || []).join('\n'), err: '' };   // 이름으로 고른 단독 컨테이너
     if (/^(ps|images)$/.test(args[0]) || args[1] === 'ls') return { code: 0, out: (state[kind] || []).join('\n'), err: '' };
-    if (args[0] === 'rm' || args[0] === 'rmi' || args[1] === 'rm') { const k = args[0] === 'rm' ? 'containers' : args[0] === 'rmi' ? 'images' : `${args[0]}s`; state[k] = (state[k] || []).filter(x => !args.includes(x) || (state.stuck || []).includes(x)); return { code: 0, out: '', err: '' }; }
+    if (args[0] === 'rm' || args[0] === 'rmi' || args[1] === 'rm') { const k = args[0] === 'rm' ? 'containers' : args[0] === 'rmi' ? 'images' : `${args[0]}s`; state[k] = (state[k] || []).filter(x => !args.includes(x) || (state.stuck || []).includes(x)); if (k === 'containers') state.named = (state.named || []).filter(x => !args.includes(x) || (state.stuck || []).includes(x)); return { code: 0, out: '', err: '' }; }
     return { code: 0, out: '', err: '' };
   };
   return { run, calls };
@@ -64,10 +65,14 @@ function fakeDocker(state) {
     const rt = Res.teardownCompose(ID, 'runtime', d1.run);
     const label = `label=com.docker.compose.project=harness-${ID}`;
     R.check('[RS-02] 작업 끝(runtime): 이 작업의 이름표가 붙은 컨테이너 · 네트워크만 지운다 — 볼륨 · 이미지는 그대로',
-      d1.calls.includes(`docker ps -aq --filter ${label}`) && d1.calls.includes('docker rm -f c1 c2') && d1.calls.includes('docker network rm n1') && !d1.calls.some(c => /volume|rmi/.test(c)) && rt.removed.containers === 2 && st.volumes.length === 1, JSON.stringify({ calls: d1.calls, rt }));
+      d1.calls.includes(`docker ps -aq --filter ${label}`) && d1.calls.includes('docker rm -f -v c1 c2') && d1.calls.includes('docker network rm n1') && !d1.calls.some(c => /volume|rmi/.test(c)) && rt.removed.containers === 2 && st.volumes.length === 1, JSON.stringify({ calls: d1.calls, rt }));
     const d2 = fakeDocker(st);
     const all = Res.teardownCompose(ID, 'all', d2.run);
     R.check('[RS-02] 치울 때(all): 볼륨 · 이미지(harness-<id>*)까지', d2.calls.includes(`docker volume ls -q --filter ${label}`) && d2.calls.includes('docker volume rm -f v1') && d2.calls.includes(`docker images -q --filter reference=harness-${ID}*`) && d2.calls.includes('docker rmi -f i1') && all.residue.length === 0, JSON.stringify(d2.calls));
+    const st5 = { up: true, containers: ['c1'], named: ['p1'] };
+    const d5 = fakeDocker(st5), rn = Res.teardownCompose(ID, 'runtime', d5.run);
+    R.check('[RS-02] 이름표 없이 docker run 으로 띄운 harness-<id>… 컨테이너도(이름 앞머리로 고른다) 익명 볼륨까지 지운다',
+      d5.calls.includes(`docker ps -aq --filter name=^/?harness-${ID}`) && d5.calls.includes('docker rm -f -v p1') && rn.removed.containers === 2 && !st5.named.length, JSON.stringify({ calls: d5.calls, rn }));
     const st3 = { up: true, containers: ['c9'], stuck: ['c9'] };
     const r3 = Res.teardownCompose(ID, 'runtime', fakeDocker(st3).run);
     R.check('[RS-02] 지워지지 않은 것은 남은 것(residue)으로 보고한다', r3.residue.length === 1 && /docker container c9/.test(r3.residue[0]), JSON.stringify(r3));
@@ -124,6 +129,34 @@ function fakeDocker(state) {
     R.check('[RS-07] --owns 는 저장소 안의 상대 경로만(.. · 절대 경로는 거부)', bad && bad.code === 'USAGE' && bad2 && bad2.code === 'USAGE', String(bad && bad.message));
     const op = require('../../harness/lib/policy').claudeSettings([], [], 'open');
     R.check('[RS-07] 작업자 설정: guard 훅이 Edit · Write · MultiEdit · NotebookEdit 도 거친다(소유 경로 강제)', /Edit\|Write\|MultiEdit\|NotebookEdit/.test(op.hooks.PreToolUse[0].matcher), op.hooks.PreToolUse[0].matcher);
+    // RS-08 — 남은 프로세스: 이 작업 worktree 경로가 명령줄에 있고 작업 시작 뒤 생긴 것만 끝낸다(실제 프로세스) — 다른 작업 · 시작 전 · 편집기는 그대로
+    const { spawn } = require('node:child_process');
+    const PID8 = 't-20261020-121212-beef', OTHER = 't-20261020-121212-bee0';
+    const wt8 = path.join(base, 'r8', '.harness-worktrees', PID8, 'x'), wt8o = path.join(base, 'r8', '.harness-worktrees', OTHER, 'x');
+    const enc8 = `C--r8--harness-worktrees-${PID8}`;   // Claude Code 가 작업 폴더 경로로 만드는 임시 폴더 이름 꼴
+    const keepAlive = 'setInterval(() => {}, 1e6)';
+    const before = spawn(process.execPath, ['-e', keepAlive, wt8], { stdio: 'ignore', windowsHide: true });
+    await new Promise(r => setTimeout(r, 1500));
+    const since8 = Date.now();
+    await new Promise(r => setTimeout(r, 1500));
+    const mineA = spawn(process.execPath, ['-e', keepAlive, wt8], { stdio: 'ignore', windowsHide: true });
+    const mineB = spawn(process.execPath, ['-e', keepAlive, path.join(base, enc8, 'tasks', 'b1.output')], { stdio: 'ignore', windowsHide: true });
+    const other = spawn(process.execPath, ['-e', keepAlive, wt8o], { stdio: 'ignore', windowsHide: true });
+    await new Promise(r => setTimeout(r, 1500));
+    const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const offEnv = process.env.HARNESS_PROC_CLEANUP; delete process.env.HARNESS_PROC_CLEANUP;   // 테스트 러너가 끈 것을 이 단언에서만 켠다
+    const k8 = Res.killStrays(PID8, { since: since8 + 60000 });   // since 는 1분 여유를 빼고 쓰므로 +1분 = 정확히 since8
+    if (offEnv !== undefined) process.env.HARNESS_PROC_CLEANUP = offEnv;
+    await new Promise(r => setTimeout(r, 1500));
+    const killedPids = k8.killed.map(x => x.pid).sort();
+    R.check('[RS-08] 이 작업 worktree 경로(그대로 · Claude 임시 폴더 꼴)를 가진, 작업 시작 뒤의 프로세스만 끝낸다 — 다른 작업 · 시작 전 프로세스는 남는다',
+      JSON.stringify(killedPids) === JSON.stringify([mineA.pid, mineB.pid].sort()) && !alive(mineA.pid) && !alive(mineB.pid) && alive(other.pid) && alive(before.pid) && !k8.residue.length,
+      JSON.stringify({ killed: killedPids, want: [mineA.pid, mineB.pid], other: alive(other.pid), before: alive(before.pid), residue: k8.residue }));
+    for (const c of [before, other]) { try { c.kill(); } catch { /* 이미 끝남 */ } }
+    const fakeList = [{ pid: 11, started: Date.now(), cmd: `"C:\\Program Files\\Microsoft VS Code\\Code.exe" ${wt8}` }, { pid: 12, started: Date.now(), cmd: `tail -f ${wt8}/log` }];
+    const killedFake = [];
+    Res.killStrays(PID8, { since: Date.now() - 1000, procs: () => fakeList, kill: pid => killedFake.push(pid) });
+    R.check('[RS-08] 사용자가 그 폴더를 연 편집기(Code 등)는 끝내지 않는다', JSON.stringify(killedFake) === '[12]', JSON.stringify(killedFake));
     R.check('[RS-06] 작업자 지시문: 쓰레기를 남기지 않는 곳($TEMP · $HARNESS_DATA_NS)을 알려 준다', /\$HARNESS_DATA_NS/.test(require('../../harness/lib/prompts').AUTONOMY || '') || /\$HARNESS_DATA_NS/.test(JSON.stringify(require('../../harness/lib/prompts'))), 'AUTONOMY');
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 900)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }

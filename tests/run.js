@@ -33,6 +33,8 @@ function runFile(file, timeoutMs) {
     delete env.NODE_TEST_CONTEXT;
     // 작업이 끝날 때마다 docker 를 띄워 보지 않게(테스트의 작업은 컨테이너를 만들지 않는다) — 자원 장부의 docker 경로는 test_v5_resources 가 가짜 실행기로 잰다
     if (env.HARNESS_DOCKER_CLEANUP == null) env.HARNESS_DOCKER_CLEANUP = 'off';
+    // 작업이 끝날 때마다 프로세스 목록을 뜨지 않게(작업마다 2초) — 남은 프로세스 정리는 test_v5_resources 가 실제 프로세스로 잰다
+    if (env.HARNESS_PROC_CLEANUP == null) env.HARNESS_PROC_CLEANUP = 'off';
     // 작업마다의 임시 폴더(자원 장부)를 이 테스트 파일 전용 폴더 아래로 — 비정상 종료를 흉내 내는 테스트가 남긴 것까지 끝나면 통째로 지운다
     //   [2026-10-20] 테스트가 사용자의 OS 임시 폴더에 빈 폴더 1,098개와 작업 폴더 수십 개를 남겼다.
     const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-test-tmp-'));

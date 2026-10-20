@@ -48,8 +48,11 @@ function teardownCompose(id, level, run) {
   const res = { skipped: null, removed: {}, residue: [] };
   if (!dockerAvailable(run)) { res.skipped = 'docker not available'; return res; }
   const label = `label=com.docker.compose.project=${composeProject(id)}`;
+  // compose 이름표가 붙은 것 + 이름이 harness-<id> 로 시작하는 단독 컨테이너(docker run --name $COMPOSE_PROJECT_NAME-pg) — 익명 볼륨(-v)까지.
+  //   [2026-10-20 실측] 작업자가 시험용 postgres 를 docker run 으로 띄우고 두고 갔다(이름표 없음 → 이름표로만 고르던 정리가 놓쳤다).
   const kinds = [
-    ['containers', ['ps', '-aq', '--filter', label], list => ['rm', '-f', ...list]],
+    ['containers', ['ps', '-aq', '--filter', label], list => ['rm', '-f', '-v', ...list]],
+    ['containers', ['ps', '-aq', '--filter', `name=^/?${composeProject(id)}`], list => ['rm', '-f', '-v', ...list]],
     ['networks', ['network', 'ls', '-q', '--filter', label], list => ['network', 'rm', ...list]],
     ...(level === 'all' ? [
       ['volumes', ['volume', 'ls', '-q', '--filter', label], list => ['volume', 'rm', '-f', ...list]],
@@ -61,7 +64,7 @@ function teardownCompose(id, level, run) {
     if (!found.length) continue;
     run('docker', rmArgs(found), 120000);
     const left = ids(run('docker', listArgs, 30000).out);
-    res.removed[kind] = found.length - left.length;
+    res.removed[kind] = (res.removed[kind] || 0) + found.length - left.length;
     for (const x of left) res.residue.push(`docker ${kind.replace(/s$/, '')} ${x}`);
   }
   return res;
@@ -90,12 +93,56 @@ function removeTmp(root, id) {
   return { dir, removed: true, residue: [] };
 }
 
+// ── 남은 프로세스 ────────────────────────────────────────────────────────────
+//   [2026-10-20 실측] 끝난 작업의 작업자 세션이 띄운 Monitor(tail -f)가 하루 넘게 살아 있었다. 명령줄에 **그 작업의 worktree 경로**가 든 프로세스만 끝낸다
+//   — 다른 작업 · 사용자의 프로세스는 건드리지 않는다. Claude Code 는 작업 폴더 경로의 글자 아닌 것을 '-' 로 바꿔 임시 폴더 이름에 쓴다
+//   (…\claude\C--repo--harness-worktrees-<id>\…) — 그 꼴도 본다. HARNESS_PROC_CLEANUP=off 면 보지 않는다(테스트 러너).
+//   작업이 시작된 뒤 생긴 프로세스만 · 사용자가 그 폴더를 연 편집기 · 탐색기는 빼고.
+const IS_WIN = process.platform === 'win32';
+const USER_APPS = /(^|[\\/"])(code|code - insiders|code-insiders|cursor|windsurf|devenv|rider64|rider|idea64|idea|pycharm64|explorer|finder)(\.exe)?["\s]/i;
+// ps 의 etime([[dd-]hh:]mm:ss) → 초
+const etimeSec = s => { const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(String(s).trim()); return m ? ((+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + +m[3] * 60 + +m[4]) : null; };
+function defaultProcs() {
+  const opts = { encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 };
+  if (IS_WIN) {
+    const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString(\'o\') })`t$($_.CommandLine)" }'], opts);
+    if (r.error || r.status !== 0) return null;
+    return String(r.stdout || '').split(/\r?\n/).map(l => /^(\d+)\t([^\t]*)\t(.*)$/.exec(l)).filter(Boolean).map(m => ({ pid: Number(m[1]), started: Date.parse(m[2]) || null, cmd: m[3] }));
+  }
+  const r = spawnSync('ps', ['-eo', 'pid=,etime=,args='], opts), now = Date.now();
+  if (r.error || r.status !== 0) return null;
+  return String(r.stdout || '').split(/\r?\n/).map(l => /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(l)).filter(Boolean).map(m => { const e = etimeSec(m[2]); return { pid: Number(m[1]), started: e == null ? null : now - e * 1000, cmd: m[3] }; });
+}
+function defaultKill(pid) {
+  if (IS_WIN) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 30000 });
+  else { try { process.kill(pid, 'SIGKILL'); } catch { /* 이미 끝남 */ } }
+}
+// → { killed: [{ pid, cmd }], residue: [] } — o.since: 작업 시작 시각(ms) · o.procs() · o.kill(pid): 테스트가 끼우는 가짜
+function killStrays(id, o) {
+  const res = { killed: [], residue: [] };
+  if (!(o && o.procs) && process.env.HARNESS_PROC_CLEANUP === 'off') return res;
+  const got = o && o.procs ? o.procs() : defaultProcs();
+  if (!got) { res.residue.push('process list unavailable — leftover processes of this task were not checked'); return res; }
+  const list = got;
+  const mine = new RegExp(`harness-worktrees(?:[\\\\/]|-+)${String(id).replace(/[^\w-]/g, '')}(?![0-9A-Za-z])`, 'i');
+  const since = o && o.since ? o.since - 60000 : null;   // 시계 오차 1분
+  const hits = list.filter(p => p.pid !== process.pid && p.pid !== process.ppid && mine.test(p.cmd || '') && !USER_APPS.test(`${p.cmd} `)
+    && (since == null || (p.started != null && p.started >= since)));
+  for (const p of hits) { (o && o.kill ? o.kill : defaultKill)(p.pid); res.killed.push({ pid: p.pid, cmd: String(p.cmd).slice(0, 160) }); }
+  if (hits.length) {
+    const after = new Set(((o && o.procs ? o.procs() : defaultProcs()) || []).map(p => p.pid));
+    for (const p of hits) if (after.has(p.pid)) res.residue.push(`process ${p.pid}: ${String(p.cmd).slice(0, 120)}`);
+  }
+  return res;
+}
+
 // 작업이 끝날 때(done · blocked · error · interrupted): 돌던 컨테이너 · 네트워크를 내리고 임시 폴더를 지운다(worktree 도 이때 지워진다).
 //   볼륨 · 이미지 · 프로젝트 정리 명령은 accept · cancel · gc 때 — 끝난 작업을 확인하거나 이어 갈 수 있게.
 function onTaskEnd(root, task, o) {
+  const p = killStrays(task.id, { since: Date.parse(task.created_at) || null, ...(o || {}) });   // 먼저 — 남은 프로세스가 임시 폴더 · 컨테이너를 붙들고 있으면 지워지지 않는다
   const d = teardownCompose(task.id, 'runtime', o && o.run);
   const t = removeTmp(root, task.id);
-  return record(task, { at: 'end', docker: d, tmp: t, residue: [...d.residue, ...t.residue] });
+  return record(task, { at: 'end', procs: p, docker: d, tmp: t, residue: [...p.residue, ...d.residue, ...t.residue] });
 }
 // 작업을 치울 때(accept · cancel · gc): 전부 회수한다.
 function release(root, task, o) {
@@ -111,4 +158,4 @@ function record(task, r) {
   return r;
 }
 
-module.exports = { envFor, tmpDirFor, dataNs, composeProject, repoKey, teardownCompose, runCleanupCommand, removeTmp, onTaskEnd, release, WT_RE };
+module.exports = { envFor, tmpDirFor, dataNs, composeProject, repoKey, teardownCompose, killStrays, listProcesses: defaultProcs, killProcess: defaultKill, runCleanupCommand, removeTmp, onTaskEnd, release, WT_RE };

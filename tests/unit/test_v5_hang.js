@@ -1,7 +1,7 @@
 'use strict';
 // 멈춘 테스트 떼어 내기 — 출력 없이 멈춘 검사를 상한(15분)까지 기다리지 않고 끊고, 언어 팩이 멈춘 테스트를 짚어 빼고 다시 잰다.
 //   [2026-10-20 실측 · 음성 비서 Python 저장소] 오디오 장치를 기다리는 테스트 하나가 2% 지점에서 영원히 멈춰 전체 pytest 가 매번 상한에 걸렸다. 모델 호출 없음.
-process.env.HARNESS_CHECK_STALL_MS = '2500';   // 멈춤 판정 2.5초(실제 5분) — checks 를 불러오기 전에
+process.env.HARNESS_CHECK_STALL_MS = '8000';   // 멈춤 판정 8초(실제 5분 — 부하가 큰 PC 에서도 pytest 의 시작 출력 사이보다 길게) — checks 를 불러오기 전에
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { makeReporter } = require('../run.js');

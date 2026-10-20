@@ -591,7 +591,7 @@ function finish(c, status, reason) {
   // [PRD R1] 이 작업이 띄운 컨테이너 · 네트워크를 내리고 임시 폴더를 지운다(볼륨 · 이미지 · 프로젝트 정리 명령은 accept · cancel · gc 때)
   try {
     const r = require('./resources').onTaskEnd(root, task);
-    if (Object.keys(r.docker.removed).length || r.residue.length || (r.tmp && r.tmp.removed)) S.log(root, task.id, { event: 'resources_end', docker: r.docker.removed, tmp_removed: !!(r.tmp && r.tmp.removed), residue: r.residue });
+    if (Object.keys(r.docker.removed).length || r.residue.length || (r.tmp && r.tmp.removed) || r.procs.killed.length) S.log(root, task.id, { event: 'resources_end', processes: r.procs.killed, docker: r.docker.removed, tmp_removed: !!(r.tmp && r.tmp.removed), residue: r.residue });
   } catch (e) { task.resources = { ...(task.resources || {}), error: String(e.message).slice(0, 200) }; }
   if (task.owner) task.owner.heartbeat_at = S.nowIso();
   S.writeTask(root, task);
