@@ -122,7 +122,7 @@ async function run(o) {
   catch (e) { return toResult({ spawnError: e, code: null, stderr: '', durationMs: 0 }, makeParser().state(), o); }
   const parser = makeParser();
   const args = [...(o.exePrefixArgs || []), ...buildArgs(o)];
-  const p = await spawnCapture({ exe: bin, args, cwd: o.cwd, input: o.prompt, env: noPushEnv(o.env, o.cwd), timeoutMs: o.timeoutMs, signal: o.signal,
+  const p = await spawnCapture({ exe: bin, args, cwd: o.cwd, input: o.prompt, env: noPushEnv(o.env, o.cwd), timeoutMs: o.timeoutMs, signal: o.signal, reapTree: true,
     onLine: l => parser.line(l), stdoutHead: 16 * 1024, stdoutTail: 64 * 1024 });
   return toResult(p, parser.state(), o);
 }

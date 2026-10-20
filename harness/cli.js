@@ -436,7 +436,10 @@ function docCommand(rest, o, root, out, err) {
 module.exports = { main, parse, USAGE };
 
 if (require.main === module) {
-  main(process.argv.slice(2)).then(code => { process.exitCode = code; }, e => { process.stderr.write((e && e.stack || String(e)) + '\n'); process.exitCode = 1; });
+  // 할 일을 마쳤는데 남은 핸들(작업자가 띄운 하위 프로세스의 파이프 · 타이머)이 프로세스를 붙들면 끝나지 않는다 — 출력이 다 나갈 시간을 두고 끝낸다.
+  //   [2026-10-20 실측 · 평가] 분리된 go 가 작업이 done 으로 끝나고 24분 넘게 살아 worktree 파일을 붙들었다(작업공간 삭제 실패).
+  const exitSoon = () => setTimeout(() => process.exit(process.exitCode), 3000).unref();
+  main(process.argv.slice(2)).then(code => { process.exitCode = code; exitSoon(); }, e => { process.stderr.write((e && e.stack || String(e)) + '\n'); process.exitCode = 1; exitSoon(); });
 }
 
 // factory — 공장 총괄(PRD R4). 시작은 go 처럼 분리된 프로세스에서(셸의 시간 상한에 함께 죽지 않게) · 부른 쪽은 끝날 때까지 기다린다(--detach 면 바로).

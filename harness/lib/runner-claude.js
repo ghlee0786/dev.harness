@@ -149,7 +149,7 @@ async function run(o) {
     const ver = exe.version(bin, o.exePrefixArgs, o.env);
     const promptsNone = o.promptsNone != null ? o.promptsNone : !!(ver && cmpVer(ver, [2, 1, 283]) >= 0);
     const args = [...(o.exePrefixArgs || []), ...buildArgs({ ...o, promptsNone }, settingsFile, sid)];
-    const p = await spawnCapture({ exe: bin, args, cwd: o.cwd, input: o.prompt, env: noPushEnv(o.env, o.cwd), timeoutMs: o.timeoutMs, signal: o.signal });
+    const p = await spawnCapture({ exe: bin, args, cwd: o.cwd, input: o.prompt, env: noPushEnv(o.env, o.cwd), timeoutMs: o.timeoutMs, signal: o.signal, reapTree: true });
     return toResult(p, parseResult(p.stdout), o, sid, mode);
   } finally {
     try { fs.rmSync(settingsFile, { force: true }); } catch { /* 임시 파일 — 남아도 결과와 무관 */ }

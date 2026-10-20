@@ -136,7 +136,7 @@ function spawnCapture(o) {
     const dOut = new StringDecoder('utf8'), dErr = new StringDecoder('utf8');
     const maxLine = o.maxLine || 64 * 1024 * 1024;
     let lineBuf = '', overlong = 0, dropping = false;
-    let done = false, timedOut = false, aborted = false, spawnError = null, child = null, timer = null, grace = null, onAbort = null;
+    let done = false, timedOut = false, aborted = false, spawnError = null, child = null, timer = null, grace = null, onAbort = null, reaped = [];
 
     const feedLines = s => {
       if (!o.onLine) return;
@@ -158,7 +158,7 @@ function spawnCapture(o) {
       if (o.onLine && lineBuf && !dropping) { try { o.onLine(lineBuf.replace(/\r$/, '')); } catch { /* 위와 같다 */ } }
       err.push(dErr.end());
       resolve({ code: code == null ? null : code, signal: sig || null, stdout: out.text(), stderr: err.text(), stdoutOmitted: out.omitted, overlongLines: overlong,
-        timedOut, aborted, spawnError, pid: child ? child.pid : null, durationMs: Date.now() - t0 });
+        timedOut, aborted, spawnError, pid: child ? child.pid : null, reaped, durationMs: Date.now() - t0 });
     };
     const kill = why => {
       if (done) return;
@@ -175,6 +175,8 @@ function spawnCapture(o) {
     } catch (e) { spawnError = e; return finish(null); }
 
     child.on('error', e => { spawnError = spawnError || e; finish(null); });
+    // o.reapTree: 작업자(모델 세션)가 끝나면 남은 자손을 거둔다(resources.reapDescendants) — 'close' 는 자손이 파이프를 붙들면 오지 않으므로 'exit' 에서
+    if (o.reapTree) child.on('exit', () => { try { reaped = require('./resources').reapDescendants(child.pid, t0).killed; } catch { /* 거두기 실패는 결과를 막지 않는다 */ } });
     child.on('close', (code, sig) => finish(code, sig));
     child.stdout.on('data', b => { const s = dOut.write(b); out.push(s); feedLines(s); });
     child.stderr.on('data', b => { err.push(dErr.write(b)); });

@@ -157,6 +157,26 @@ function fakeDocker(state) {
     const killedFake = [];
     Res.killStrays(PID8, { since: Date.now() - 1000, procs: () => fakeList, kill: pid => killedFake.push(pid) });
     R.check('[RS-08] 사용자가 그 폴더를 연 편집기(Code 등)는 끝내지 않는다', JSON.stringify(killedFake) === '[12]', JSON.stringify(killedFake));
+
+    // RS-10 — 작업자가 끝나면 남긴 자손을 거둔다(명령줄에 경로가 없어도) — 작업자 역할의 node 가 끝나지 않는 손자를 띄우고 먼저 끝난다
+    const worker = path.join(base, 'worker10.js');
+    write(worker, "const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6)'], { stdio: 'ignore', detached: true, windowsHide: true }); g.unref(); console.log('GRAND ' + g.pid);\n");
+    const bystander = spawn(process.execPath, ['-e', keepAlive], { stdio: 'ignore', windowsHide: true });
+    const off10 = process.env.HARNESS_PROC_CLEANUP; delete process.env.HARNESS_PROC_CLEANUP;
+    const p10 = await P.spawnCapture({ exe: process.execPath, args: [worker], cwd: base, reapTree: true, timeoutMs: 60000 });
+    if (off10 !== undefined) process.env.HARNESS_PROC_CLEANUP = off10;
+    const grand = Number((/GRAND (\d+)/.exec(p10.stdout) || [])[1]);
+    await new Promise(r => setTimeout(r, 1500));
+    R.check('[RS-10] 작업자가 끝나면 남긴 손자(경로 없는 대기 루프 꼴)를 거둔다 · 무관한 프로세스는 그대로',
+      grand > 0 && !alive(grand) && (p10.reaped || []).some(x => x.pid === grand) && alive(bystander.pid), JSON.stringify({ grand, alive: grand && alive(grand), reaped: p10.reaped, bystander: alive(bystander.pid) }));
+    try { bystander.kill(); } catch { /* 이미 끝남 */ }
+    if (grand && alive(grand)) { try { process.kill(grand); } catch { /* 이미 끝남 */ } }
+
+    // RS-09 — CLI 는 할 일을 마치면 남은 핸들이 있어도 끝난다(분리된 go 가 done 뒤 24분 살아 있던 실측) — 새는 타이머를 미리 심어 재현
+    const leak = path.join(base, 'leak.js'); write(leak, 'setInterval(() => {}, 1000);\n');
+    const r9 = repo({ 'a.txt': 'x\n' }), t9 = Date.now();
+    const cli9 = spawnSync(process.execPath, ['-r', leak, path.join(__dirname, '..', '..', 'harness', 'cli.js'), 'status', '--root', r9], { encoding: 'utf8', windowsHide: true, timeout: 40000 });
+    R.check('[RS-09] 남은 핸들(타이머)이 있어도 CLI 는 일을 마치고 몇 초 안에 끝난다(종료 코드 유지)', !cli9.error && cli9.status === 0 && Date.now() - t9 < 25000, JSON.stringify({ err: cli9.error && cli9.error.code, status: cli9.status, ms: Date.now() - t9, out: (cli9.stdout || '').slice(0, 120) }));
     R.check('[RS-06] 작업자 지시문: 쓰레기를 남기지 않는 곳($TEMP · $HARNESS_DATA_NS)을 알려 준다', /\$HARNESS_DATA_NS/.test(require('../../harness/lib/prompts').AUTONOMY || '') || /\$HARNESS_DATA_NS/.test(JSON.stringify(require('../../harness/lib/prompts'))), 'AUTONOMY');
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 900)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }

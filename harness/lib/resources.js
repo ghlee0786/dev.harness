@@ -105,13 +105,32 @@ const etimeSec = s => { const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(Str
 function defaultProcs() {
   const opts = { encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 64 * 1024 * 1024 };
   if (IS_WIN) {
-    const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString(\'o\') })`t$($_.CommandLine)" }'], opts);
+    const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$(if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString(\'o\') })`t$($_.CommandLine)" }'], opts);
     if (r.error || r.status !== 0) return null;
-    return String(r.stdout || '').split(/\r?\n/).map(l => /^(\d+)\t([^\t]*)\t(.*)$/.exec(l)).filter(Boolean).map(m => ({ pid: Number(m[1]), started: Date.parse(m[2]) || null, cmd: m[3] }));
+    return String(r.stdout || '').split(/\r?\n/).map(l => /^(\d+)\t(\d*)\t([^\t]*)\t(.*)$/.exec(l)).filter(Boolean).map(m => ({ pid: Number(m[1]), ppid: Number(m[2]) || 0, started: Date.parse(m[3]) || null, cmd: m[4] }));
   }
-  const r = spawnSync('ps', ['-eo', 'pid=,etime=,args='], opts), now = Date.now();
+  // 좀비(Z — 끝났지만 부모가 아직 거두지 않음)는 뺀다: 끝낸 직후 다시 볼 때 남은 것으로 잘못 보이지 않게(CI Linux · macOS 실측)
+  const r = spawnSync('ps', ['-eo', 'pid=,ppid=,stat=,etime=,args='], opts), now = Date.now();
   if (r.error || r.status !== 0) return null;
-  return String(r.stdout || '').split(/\r?\n/).map(l => /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(l)).filter(Boolean).map(m => { const e = etimeSec(m[2]); return { pid: Number(m[1]), started: e == null ? null : now - e * 1000, cmd: m[3] }; });
+  return String(r.stdout || '').split(/\r?\n/).map(l => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(l)).filter(m => m && !/^Z/.test(m[3])).map(m => { const e = etimeSec(m[4]); return { pid: Number(m[1]), ppid: Number(m[2]), started: e == null ? null : now - e * 1000, cmd: m[5] }; });
+}
+// 끝난 작업자(모델 세션)의 남은 자손을 거둔다 — [2026-10-20 실측 · 평가] 작업자 세션이 띄운 bash 대기 루프(Windows 에 없는 pgrep 을 기다림)가
+//   세션이 끝난 뒤에도 남아 worktree 를 현재 폴더로 붙들었다(명령줄에 경로가 없어 경로로는 못 잡는다).
+//   Windows: 부모가 죽어도 자식의 ParentProcessId 는 남는다 — 작업자 pid 에서 부모-자식으로 따라간다(작업자가 시작된 뒤 생긴 것만 · pid 재사용 방지).
+//   POSIX: 작업자는 자기 프로세스 그룹으로 띄운다(proc.spawnCapture detached) — 그룹째 끝낸 뒤, 부모-자식으로 남은 것도.
+function reapDescendants(rootPid, sinceMs, o) {
+  const res = { killed: [], residue: [] };
+  if (!rootPid || (!(o && o.procs) && process.env.HARNESS_PROC_CLEANUP === 'off')) return res;
+  const kill = (o && o.kill) || defaultKill;
+  if (!IS_WIN && !(o && o.procs)) { try { process.kill(-rootPid, 'SIGKILL'); } catch { /* 그룹이 이미 없다 */ } }
+  const list = (o && o.procs ? o.procs() : defaultProcs()) || [];
+  const since = (sinceMs || 0) - 2000, tree = new Set([rootPid]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const p of list) if (!tree.has(p.pid) && tree.has(p.ppid) && p.pid !== process.pid && (p.started == null || p.started >= since)) { tree.add(p.pid); grew = true; }
+  }
+  for (const p of list) if (p.pid !== rootPid && tree.has(p.pid)) { kill(p.pid); res.killed.push({ pid: p.pid, cmd: String(p.cmd || '').slice(0, 160) }); }
+  return res;
 }
 function defaultKill(pid) {
   if (IS_WIN) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 30000 });
@@ -130,6 +149,7 @@ function killStrays(id, o) {
     && (since == null || (p.started != null && p.started >= since)));
   for (const p of hits) { (o && o.kill ? o.kill : defaultKill)(p.pid); res.killed.push({ pid: p.pid, cmd: String(p.cmd).slice(0, 160) }); }
   if (hits.length) {
+    if (!(o && o.procs)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);   // 끝나는 데 걸리는 잠깐
     const after = new Set(((o && o.procs ? o.procs() : defaultProcs()) || []).map(p => p.pid));
     for (const p of hits) if (after.has(p.pid)) res.residue.push(`process ${p.pid}: ${String(p.cmd).slice(0, 120)}`);
   }
@@ -158,4 +178,4 @@ function record(task, r) {
   return r;
 }
 
-module.exports = { envFor, tmpDirFor, dataNs, composeProject, repoKey, teardownCompose, killStrays, listProcesses: defaultProcs, killProcess: defaultKill, runCleanupCommand, removeTmp, onTaskEnd, release, WT_RE };
+module.exports = { envFor, tmpDirFor, dataNs, composeProject, repoKey, teardownCompose, killStrays, reapDescendants, listProcesses: defaultProcs, killProcess: defaultKill, runCleanupCommand, removeTmp, onTaskEnd, release, WT_RE };
