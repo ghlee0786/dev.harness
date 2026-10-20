@@ -110,9 +110,9 @@ function defaultProcs() {
     return String(r.stdout || '').split(/\r?\n/).map(l => /^(\d+)\t(\d*)\t([^\t]*)\t(.*)$/.exec(l)).filter(Boolean).map(m => ({ pid: Number(m[1]), ppid: Number(m[2]) || 0, started: Date.parse(m[3]) || null, cmd: m[4] }));
   }
   // 좀비(Z — 끝났지만 부모가 아직 거두지 않음)는 뺀다: 끝낸 직후 다시 볼 때 남은 것으로 잘못 보이지 않게(CI Linux · macOS 실측)
-  const r = spawnSync('ps', ['-eo', 'pid=,ppid=,stat=,etime=,args='], opts), now = Date.now();
+  const r = spawnSync('ps', ['-eo', 'pid=,ppid=,pgid=,stat=,etime=,args='], opts), now = Date.now();
   if (r.error || r.status !== 0) return null;
-  return String(r.stdout || '').split(/\r?\n/).map(l => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(l)).filter(m => m && !/^Z/.test(m[3])).map(m => { const e = etimeSec(m[4]); return { pid: Number(m[1]), ppid: Number(m[2]), started: e == null ? null : now - e * 1000, cmd: m[5] }; });
+  return String(r.stdout || '').split(/\r?\n/).map(l => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(l)).filter(m => m && !/^Z/.test(m[4])).map(m => { const e = etimeSec(m[5]); return { pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), started: e == null ? null : now - e * 1000, cmd: m[6] }; });
 }
 // 끝난 작업자(모델 세션)의 남은 자손을 거둔다 — [2026-10-20 실측 · 평가] 작업자 세션이 띄운 bash 대기 루프(Windows 에 없는 pgrep 을 기다림)가
 //   세션이 끝난 뒤에도 남아 worktree 를 현재 폴더로 붙들었다(명령줄에 경로가 없어 경로로는 못 잡는다).
@@ -122,9 +122,10 @@ function reapDescendants(rootPid, sinceMs, o) {
   const res = { killed: [], residue: [] };
   if (!rootPid || (!(o && o.procs) && process.env.HARNESS_PROC_CLEANUP === 'off')) return res;
   const kill = (o && o.kill) || defaultKill;
-  if (!IS_WIN && !(o && o.procs)) { try { process.kill(-rootPid, 'SIGKILL'); } catch { /* 그룹이 이미 없다 */ } }
-  const list = (o && o.procs ? o.procs() : defaultProcs()) || [];
+  const list = (o && o.procs ? o.procs() : defaultProcs()) || [];   // 먼저 뜬다 — 그룹째 끝내면 누가 있었는지 기록할 수 없다
   const since = (sinceMs || 0) - 2000, tree = new Set([rootPid]);
+  for (const p of list) if (p.pgid === rootPid && p.pid !== process.pid) tree.add(p.pid);   // POSIX: 작업자의 프로세스 그룹
+  if (!IS_WIN && !(o && o.procs)) { try { process.kill(-rootPid, 'SIGKILL'); } catch { /* 그룹이 이미 없다 */ } }
   for (let grew = true; grew;) {
     grew = false;
     for (const p of list) if (!tree.has(p.pid) && tree.has(p.ppid) && p.pid !== process.pid && (p.started == null || p.started >= since)) { tree.add(p.pid); grew = true; }
