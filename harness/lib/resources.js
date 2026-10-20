@@ -129,7 +129,20 @@ function reapDescendants(rootPid, sinceMs, o) {
     grew = false;
     for (const p of list) if (!tree.has(p.pid) && tree.has(p.ppid) && p.pid !== process.pid && (p.started == null || p.started >= since)) { tree.add(p.pid); grew = true; }
   }
-  for (const p of list) if (p.pid !== rootPid && tree.has(p.pid)) { kill(p.pid); res.killed.push({ pid: p.pid, cmd: String(p.cmd || '').slice(0, 160) }); }
+  // Linux: 새 세션으로 나가(setsid) 그룹을 벗어나고 init 에 맡겨진 것도 — 환경의 HARNESS_TASK_ID(그 작업 고유)는 물려받는다. macOS 는 /proc 가 없어 그룹 · 부모 관계까지만.
+  const taskId = o && o.taskId && /^t-\d{8}-\d{6}-[0-9a-f]{4}$/.test(o.taskId) ? o.taskId : null;
+  if (taskId && !IS_WIN && !(o && o.procs)) {
+    let pids = []; try { pids = fs.readdirSync('/proc').filter(x => /^\d+$/.test(x)).map(Number); } catch { /* /proc 없음(macOS) */ }
+    const byPid = new Map(list.map(p => [p.pid, p]));
+    for (const pid of pids) {
+      if (pid === process.pid || pid === process.ppid || tree.has(pid)) continue;
+      let env = ''; try { env = fs.readFileSync(`/proc/${pid}/environ`, 'latin1'); } catch { continue; }
+      const p = byPid.get(pid);
+      if (env.split('\0').includes(`HARNESS_TASK_ID=${taskId}`) && (!p || p.started == null || p.started >= since)) tree.add(pid);
+    }
+  }
+  const byPid = new Map(list.map(p => [p.pid, p]));
+  for (const pid of tree) if (pid !== rootPid) { kill(pid); res.killed.push({ pid, cmd: String((byPid.get(pid) || {}).cmd || '').slice(0, 160) }); }
   return res;
 }
 function defaultKill(pid) {

@@ -176,7 +176,7 @@ function spawnCapture(o) {
 
     child.on('error', e => { spawnError = spawnError || e; finish(null); });
     // o.reapTree: 작업자(모델 세션)가 끝나면 남은 자손을 거둔다(resources.reapDescendants) — 'close' 는 자손이 파이프를 붙들면 오지 않으므로 'exit' 에서
-    if (o.reapTree) child.on('exit', () => { try { reaped = require('./resources').reapDescendants(child.pid, t0).killed; } catch { /* 거두기 실패는 결과를 막지 않는다 */ } });
+    if (o.reapTree) child.on('exit', () => { try { reaped = require('./resources').reapDescendants(child.pid, t0, { taskId: (o.env || {}).HARNESS_TASK_ID }).killed; } catch { /* 거두기 실패는 결과를 막지 않는다 */ } });
     child.on('close', (code, sig) => finish(code, sig));
     child.stdout.on('data', b => { const s = dOut.write(b); out.push(s); feedLines(s); });
     child.stderr.on('data', b => { err.push(dErr.write(b)); });

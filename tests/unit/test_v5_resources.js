@@ -160,10 +160,11 @@ function fakeDocker(state) {
 
     // RS-10 — 작업자가 끝나면 남긴 자손을 거둔다(명령줄에 경로가 없어도) — 작업자 역할의 node 가 끝나지 않는 손자를 띄우고 먼저 끝난다
     const worker = path.join(base, 'worker10.js');
-    write(worker, "const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6)'], { stdio: 'ignore', detached: true, windowsHide: true }); g.unref(); console.log('GRAND ' + g.pid);\n");
+    write(worker, "const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6)'], { stdio: 'ignore', detached: process.platform !== 'darwin', windowsHide: true }); g.unref(); console.log('GRAND ' + g.pid);\n");
     const bystander = spawn(process.execPath, ['-e', keepAlive], { stdio: 'ignore', windowsHide: true });
     const off10 = process.env.HARNESS_PROC_CLEANUP; delete process.env.HARNESS_PROC_CLEANUP;
-    const p10 = await P.spawnCapture({ exe: process.execPath, args: [worker], cwd: base, reapTree: true, timeoutMs: 60000 });
+    // 손자는 새 세션으로(setsid) 나가 그룹을 벗어난다 — Windows 는 부모-자식 기록 · Linux 는 환경의 HARNESS_TASK_ID 로 거둔다. macOS 는 /proc 가 없어 그룹 안의 손자만(한계)
+    const p10 = await P.spawnCapture({ exe: process.execPath, args: [worker], cwd: base, env: { HARNESS_TASK_ID: 't-20261020-131313-cafe' }, reapTree: true, timeoutMs: 60000 });
     if (off10 !== undefined) process.env.HARNESS_PROC_CLEANUP = off10;
     const grand = Number((/GRAND (\d+)/.exec(p10.stdout) || [])[1]);
     await new Promise(r => setTimeout(r, 1500));
