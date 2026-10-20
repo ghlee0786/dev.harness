@@ -43,6 +43,8 @@ const cli = (cwd, args) => {
 const cliJson = (cwd, args) => { const r = cli(cwd, [...args, '--json']); try { return { ...r, json: JSON.parse(r.out) }; } catch { return { ...r, json: null }; } };
 const fm = (root, rel) => D.readDoc(root, rel).data;
 const today = D.today();
+// 자정을 넘겨 도는 테스트(CI 는 UTC)에서 시작 때의 오늘과 기록 때의 오늘이 다를 수 있다 — 둘 다 오늘로 본다(2026-10-20 CI 실측)
+const isToday = d => d === today || d === D.today();
 const quiet = { log: () => {} };
 const CHECK_JS = `const fs=require('fs');if(fs.existsSync('feature.txt')){console.log('# pass 1\\n# fail 0');process.exit(0);}console.log('# pass 0\\n# fail 1');process.exit(1);`;
 function fake() {
@@ -68,7 +70,7 @@ function fake() {
     const p1 = `docs/prds/${today}-결제-흐름-개선-v2.md`;
     R.check('[DOC-01] prd → docs/prds/<날짜>-<슬러그>.md (한글 유지 · 기호 → - · 끝 - 제거)', n1.code === 0 && n1.json && n1.json.path === p1 && fs.existsSync(path.join(r1, p1)), `${n1.code} ${n1.out} ${n1.err}`);
     const f1 = fm(r1, p1);
-    R.check('[DOC-01] front matter: kind · title · status draft · created/updated 오늘 · tasks [] · supersedes 빈 값', f1.kind === 'prd' && f1.title === '결제 흐름 개선: v2!' && f1.status === 'draft' && f1.created === today && f1.updated === today
+    R.check('[DOC-01] front matter: kind · title · status draft · created/updated 오늘 · tasks [] · supersedes 빈 값', f1.kind === 'prd' && f1.title === '결제 흐름 개선: v2!' && f1.status === 'draft' && isToday(f1.created) && isToday(f1.updated)
       && Array.isArray(f1.tasks) && f1.tasks.length === 0 && !f1.supersedes && !f1.superseded_by && f1.with === undefined && f1.direction === undefined, JSON.stringify(f1));
     const t1 = read(path.join(r1, p1));
     R.check('[DOC-01] 파일은 --- 로 시작하고 prd 골격(배경 · 목표 · 요구사항 · 범위 밖 · 완료 기준 · 열린 질문)', t1.startsWith('---\nkind: prd\n') && ['배경', '목표', '요구사항', '범위 밖', '완료 기준', '열린 질문'].every(h => t1.includes(`## ${h}\n`)), t1);
@@ -112,7 +114,7 @@ function fake() {
     const abs1 = path.join(r1, p1);
     fs.writeFileSync(abs1, read(abs1).replace(`updated: ${today}`, 'updated: 2000-01-02').replace(`created: ${today}`, 'created: 2000-01-01'));
     const st1 = cli(r1, ['doc', 'status', p1, 'active']);
-    R.check('[DOC-03] status active → status · updated 오늘(본문은 그대로)', st1.code === 0 && fm(r1, p1).status === 'active' && fm(r1, p1).updated === today && fm(r1, p1).created === '2000-01-01' && read(abs1).includes('## 열린 질문'), st1.out + st1.err);
+    R.check('[DOC-03] status active → status · updated 오늘(본문은 그대로)', st1.code === 0 && fm(r1, p1).status === 'active' && isToday(fm(r1, p1).updated) && fm(r1, p1).created === '2000-01-01' && read(abs1).includes('## 열린 질문'), st1.out + st1.err);
     const p1b = n1b.json.path;
     const before1b = read(path.join(r1, p1b));
     const st2 = cli(r1, ['doc', 'status', p1b, 'superseded']);
@@ -227,7 +229,7 @@ function fake() {
     const acc2 = await I.accept({ ...quiet, root: r2, id: g2.id });
     const f2a = fm(r2, d2.path);
     const head2 = git(r2, ['log', '-1', '--format=%s', 'main']);
-    R.check('[DOC-08] accept(무시된 문서): tasks 에 id · updated · 커밋하지 않음 · 보고에 로컬 전용', acc2.status === 'accepted' && f2a.tasks.includes(g2.id) && f2a.updated === today && head2.startsWith('harness: accept') && /local|로컬/.test(acc2.report), `${acc2.status} ${head2} ${acc2.report}`);
+    R.check('[DOC-08] accept(무시된 문서): tasks 에 id · updated · 커밋하지 않음 · 보고에 로컬 전용', acc2.status === 'accepted' && f2a.tasks.includes(g2.id) && isToday(f2a.updated) && head2.startsWith('harness: accept') && /local|로컬/.test(acc2.report), `${acc2.status} ${head2} ${acc2.report}`);
     R.check('[DOC-08] accept 연결 전 판이 이력에 남는다', D.history(r2, d2.path).length >= 1);
 
     // ── accept 연결 — 추적되는 docs → 그 문서(와 README)만 커밋 ─────────────
