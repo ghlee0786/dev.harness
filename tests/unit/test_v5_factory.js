@@ -68,6 +68,10 @@ const plan = cards => JSON.stringify({ contracts: 'module.exports names are the 
     const ev2 = fs.readFileSync(F.dirs(r2, g2.id).logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l));
     const at = (e, card) => ev2.findIndex(x => x.event === e && x.card === card);
     R.check('[FA-02] 독립 카드는 동시에 돈다(c2 가 c1 합류 전에 시작) · 의존 카드는 앞 카드가 합쳐진 뒤 시작', s1 && s2 && at('card_start', 'c2') < at('card_merged', 'c1') && at('card_start', 'c3') > at('card_merged', 'c1'), JSON.stringify(ev2.map(x => [x.event, x.card])));
+    // FA-02b — [2026-10-21 사용자 지시 · thin] 기본 공장: 카드는 thin 작업자 · 시험 웨이브(모델이 찾고 모델이 확인)는 --verify 일 때만
+    R.check('[FA-02b] 기본 공장 — 카드 작업은 thin 모드 · 시험 웨이브 없음(verify 기록 없음 · 시험 에이전트 호출 없음)',
+      run2.cards.every(k => (k.task_ids || []).every(id => require('../../harness/lib/state').readTask(r2, id).mode === 'thin')) && !run2.verify && f2.calls.work.every(w => w.card),
+      JSON.stringify({ verify: !!run2.verify, modes: run2.cards.map(k => (k.task_ids || []).map(id => require('../../harness/lib/state').readTask(r2, id).mode)) }));
     R.check('[FA-02] 사용자 브랜치(main)는 그대로 · 계획 · 통합 worktree 는 치웠다', git(r2, 'rev-parse', 'main') === main0 && !/-plan|-int/.test(git(r2, 'worktree', 'list')), git(r2, 'worktree', 'list'));
     R.check('[FA-02] 카드 작업은 소유 경로를 받는다(작업 기록 · 지시문) · 지시문에 전체 요구 · 계약 · 이미 합쳐진 카드', run2.cards.every(c => c.task_ids.length && JSON.stringify(S.readTask(r2, c.task_ids[0]).owns) === JSON.stringify(c.owns))
       && /Overall request: 세 모듈을 만들어라/.test(w.find(x => x.card === 'c3').prompt) && /Contracts every card follows/.test(w.find(x => x.card === 'c3').prompt) && /Already merged into the code you start from: c1/.test(w.find(x => x.card === 'c3').prompt), w.find(x => x.card === 'c3').prompt.slice(-600));
@@ -81,6 +85,12 @@ const plan = cards => JSON.stringify({ contracts: 'module.exports names are the 
     const f3b = fake(['{}', '{"cards":[]}'], {});
     const g3b = await F.start({ ...quiet, root: repo(), request: 'make y', run: f3b.run });
     R.check('[FA-03] 두 번 모두 틀리면 error(작업을 시작하지 않는다)', g3b.status === 'error' && !f3b.calls.work.length && /did not produce a valid plan/.test(g3b.reason), JSON.stringify(g3b));
+    // FA-03c — [2026-10-21 평가에서 발견] Codex 공장의 계획 에이전트에 모델 'opus' 를 넘겨 5초 만에 실패했고, 그 오류가 "JSON 이 아니다" 로 가려졌다
+    const callsC = [];
+    const runC = async o => { callsC.push(o); return { ok: false, is_error: true, error_kind: 'model', error_message: 'unknown model', session_id: null, final_text: '', cost_usd: null, permission_denials: [] }; };
+    const g3c = await F.start({ ...quiet, root: repo(), request: 'make z', run: runC, runtime: 'codex' });
+    R.check('[FA-03c] Codex 공장: 계획 에이전트에 Claude 모델 이름을 넘기지 않는다 · 러너 오류는 이유에 그대로', callsC.length >= 1 && callsC.every(o => o.model == null && o.runtime === 'codex') && /planner session failed \(model\): unknown model/.test(g3c.reason),
+      JSON.stringify({ models: callsC.map(o => o.model), reason: g3c.reason }));
 
     // FA-04 — 각자는 통과하지만 합치면 깨지는 조합(의미 충돌): 뒤에 합친 카드를 되돌리고(revert) 이유와 함께 최신 통합 상태에서 다시 → 고치면 merged
     const r4 = repo();
@@ -166,7 +176,7 @@ fs.mkdirSync(p.join(o.cwd,'src','z'),{recursive:true});fs.writeFileSync(p.join(o
       write(path.join(o.cwd, 'src/a/a.js'), 'module.exports = (a, b) => Math.abs(a) + Math.abs(b);\n');
       return ok();
     };
-    const g9 = await F.start({ ...quiet, root: r9, request: 'add 함수를 만들어라', run: run9, jobs: 2, testAgents: 3, waves: 3 });
+    const g9 = await F.start({ ...quiet, root: r9, request: 'add 함수를 만들어라', run: run9, jobs: 2, verify: true, testAgents: 3, waves: 3 });   // 시험 웨이브는 이제 --verify 일 때만
     const run9r = F.readRun(r9, g9.id), V9 = run9r.verify;
     const fA = V9.findings.find(x => /negative/.test(x.title)), fB = V9.findings.find(x => /slow/.test(x.title));
     R.check('[FA-09] 시험 설계가 낸 차터마다 시험 에이전트 · 같은 결함 둘은 하나로 묶인다(보고 2) · 고유 결함 2', calls9.testers.length >= 2 && V9.findings.length === 2 && fA && fA.reports === 2, JSON.stringify(V9.findings.map(x => [x.id, x.status, x.reports, x.title])));

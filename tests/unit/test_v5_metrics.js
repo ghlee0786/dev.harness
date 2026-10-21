@@ -10,7 +10,7 @@ const R = makeReporter('작업 수치 — 비용 · 계획 · 시험 · 품질 �
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-v5-metrics-'));
 const write = (f, t) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); };
 const git = (cwd, ...a) => (spawnSync('git', a, { cwd, encoding: 'utf8', windowsHide: true }).stdout || '').trim();
-const quiet = { log: () => {} };
+const quiet = { log: () => {}, mode: 'full', eagerBaseline: true };   // 기준선 수치(MT-03) · 품질 되돌려 보내기(MT-04)는 full 모드에서만
 const ok = o => ({ ok: true, is_error: false, session_id: o.newSessionId || o.sessionId, final_text: 'done', cost_usd: 0.5, permission_denials: [] });
 function repo(name) {
   const d = path.join(base, name); fs.mkdirSync(d, { recursive: true });

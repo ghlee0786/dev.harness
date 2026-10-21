@@ -163,8 +163,15 @@ function killStrays(id, o) {
     && (since == null || (p.started != null && p.started >= since)));
   for (const p of hits) { (o && o.kill ? o.kill : defaultKill)(p.pid); res.killed.push({ pid: p.pid, cmd: String(p.cmd).slice(0, 160) }); }
   if (hits.length) {
-    if (!(o && o.procs)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);   // 끝나는 데 걸리는 잠깐
-    const after = new Set(((o && o.procs ? o.procs() : defaultProcs()) || []).map(p => p.pid));
+    // 끝나는 데 걸리는 시간 — [2026-10-21 실측] 부하가 큰 Windows 에서 taskkill 뒤 0.5초 안에 사라지지 않아 남은 것으로 잘못 셌다.
+    //   Windows 는 최대 5초까지 존재 확인(process.kill 0)으로 기다린다. POSIX 는 좀비가 남아 보이므로 목록(좀비 제외)으로 다시 본다.
+    const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    const exists = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+    if (!(o && o.procs)) {
+      if (IS_WIN) { for (let i = 0; i < 20 && hits.some(p => exists(p.pid)); i++) sleep(250); }
+      else sleep(500);
+    }
+    const after = new Set(((o && o.procs ? o.procs() : (IS_WIN ? hits.filter(p => exists(p.pid)) : defaultProcs())) || []).map(p => p.pid));
     for (const p of hits) if (after.has(p.pid)) res.residue.push(`process ${p.pid}: ${String(p.cmd).slice(0, 120)}`);
   }
   return res;

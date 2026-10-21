@@ -239,7 +239,10 @@ async function accept(o) {
 
     // 2. 대상 브랜치를 가져와 최신화(충돌 → 같은 세션이 푼다 · 예산 안에서만) → 검사
     const checkHere = async (why) => {
-      const j = (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
+      const run1 = async () => (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
+      let j = await run1();
+      // 늦은 기준선(D2): 실패했는데 기준선이 없으면 지금 작업 시작 시점에서 잰다 — 명령이 바뀌면(멈춘 테스트 · 빠진 검사) 다시 잰다
+      if (!j.ok && !task.checks.baseline) { const before = JSON.stringify(task.checks.commands); await L.ensureBaseline(root, task, { o: { checkTimeoutMs: checkTimeout(task, o) }, log }); if (JSON.stringify(task.checks.commands) !== before) j = await run1(); }
       task.checks.last = K.brief(j);
       const v = K.judge(j, task.checks.baseline, { notWorse: task.checks.source !== 'user' });
       S.log(root, task.id, { event: 'checks', phase: 'accept', why, verdict: v.verdict, pass: j.pass, fail: j.fail });
@@ -397,7 +400,9 @@ async function revertOnto(root, task, target, commit, extra, label, o) {
     } else if (task.checks.commands.length) {
       // cancel: 되돌린 뒤의 상태는 작업 전 기준선보다 나쁘지 않으면 된다(사용자 검사는 되돌린 기능을 묘사하므로 다시 빨개지는 게 맞다).
       // restore: 기능이 돌아오므로 accept 때와 같은 판정.
-      const j = await K.runAll(tmp, K.commandsForJudge(tmp, task.checks), { timeoutMs: checkTimeout(task, o), serialRoot: task.checks.serial ? root : null });
+      const runT = () => K.runAll(tmp, K.commandsForJudge(tmp, task.checks), { timeoutMs: checkTimeout(task, o), serialRoot: task.checks.serial ? root : null });
+      let j = await runT();
+      if (!j.ok && !task.checks.baseline) { const before = JSON.stringify(task.checks.commands); await L.ensureBaseline(root, task, { o: { checkTimeoutMs: checkTimeout(task, o) }, log: (o && o.log) || (() => {}) }); if (JSON.stringify(task.checks.commands) !== before) j = await runT(); }
       const v = K.judge(j, task.checks.baseline, { notWorse: label === 'cancel' || task.checks.source !== 'user' });
       S.log(root, task.id, { event: 'checks', phase: label, verdict: v.verdict, pass: j.pass, fail: j.fail });
       if (v.verdict === 'fail') return { refused: `checks fail on ${target} after the ${label} revert (${j.fail} failing); nothing was applied — if this is only an environment problem, run ${label} again with --skip-checks` };

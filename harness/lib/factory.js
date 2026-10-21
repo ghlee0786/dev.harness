@@ -93,6 +93,7 @@ async function runChecks(c) {
   return K.runAll(c.intWt, c.commands, { timeoutMs: c.checkTimeoutMs });
 }
 async function mergeCard(c, card, task) {
+  if (c.baselineP) await c.baselineP;   // 통합 worktree 에서 기준선 검사가 끝난 뒤에만 합친다
   const { root, run } = c, msg = `factory ${run.id}: ${card.id} — ${String(card.title || '').slice(0, 72)}`;
   const m = G.git(c.intWt, [...G.identityArgs(c.intWt), 'merge', '--no-ff', '--no-verify', '-m', msg, task.branch], { allowFail: true });
   if (!m.ok) {
@@ -127,7 +128,7 @@ async function runCard(c, card) {
   event(root, run.id, { event: 'card_start', card: card.id, attempt: card.attempts });
   let res;
   try {
-    res = await require('./loop').go({ root, goal: cardGoal(c, card), base: c.branch, owns: card.owns, run: o.run, runtime: o.runtime, model: o.model,
+    res = await require('./loop').go({ root, goal: cardGoal(c, card), base: c.branch, owns: card.owns, run: o.run, runtime: o.runtime, mode: o.mode, model: o.model,
       budgetUsd: Math.min(o.cardBudgetUsd, Math.max(1, o.budgetUsd - spent(c))), wallMin: o.cardWallMin, log: o.log || (() => {}), checks: o.checks, factory: { run: run.id, card: card.id } });
   } catch (e) { res = { status: 'error', reason: e.message }; }
   card.task_ids = [...(card.task_ids || []), res.id].filter(Boolean);
@@ -199,12 +200,14 @@ async function start(o0) {
     try {
       for (let attempt = 1; attempt <= 2 && !plan; attempt++) {
         const prompt = plannerPrompt(run.request, o) + (problems.length ? `\n\nYour previous plan was rejected:\n- ${problems.join('\n- ')}\nFix these and reply with the whole JSON again.` : '');
-        const r = await o.run({ runtime: o.runtime || 'claude', cwd: D.planWt, prompt, newSessionId: crypto.randomUUID(), model: o.model || 'opus', budgetUsd: o.planBudgetUsd, timeoutMs: o.planTimeoutMs,
+        const r = await o.run({ runtime: o.runtime || 'claude', cwd: D.planWt, prompt, newSessionId: crypto.randomUUID(), model: o.model || ((o.runtime || 'claude') === 'claude' ? 'opus' : null), budgetUsd: o.planBudgetUsd, timeoutMs: o.planTimeoutMs,
           allowCommands: [], allowRules: [], workerPermissions: 'strict', systemAppend: '' });
         run.plan_cost_usd += Number(r && r.cost_usd) || 0;
         const p = parsePlan(r && r.final_text), v = validatePlan(p, o);
         if (!v.errs.length) { plan = p; run.serialized = v.serialized; } else problems = v.errs;
-        event(root, fid, { event: 'plan', attempt, ok: !v.errs.length, problems: v.errs, cost_usd: r && r.cost_usd });
+        // 러너 오류(모델 이름 · 인증 · 한도)는 "JSON 이 아니다" 로 가려지지 않게 기록 · 보고한다
+        if (r && r.is_error) problems = [`the planner session failed (${r.error_kind || 'error'}): ${String(r.error_message || r.stderr_tail || '').replace(/\s+/g, ' ').slice(0, 300)}`, ...problems];
+        event(root, fid, { event: 'plan', attempt, ok: !v.errs.length, problems, cost_usd: r && r.cost_usd, error: r && r.is_error ? (r.error_kind || 'error') : undefined });
       }
     } finally { G.removeWorktree(root, D.planWt); G.removeEmptyDir(D.planWt); }
     if (!plan) { run.status = 'error'; run.reason = `the planner did not produce a valid plan: ${problems.join('; ').slice(0, 500)}`; return finish(c, log); }
@@ -216,12 +219,13 @@ async function start(o0) {
     G.git(root, ['branch', '-f', D.branch, baseCommit]);
     G.git(root, ['worktree', 'add', '-f', D.intWt, D.branch], { retryLock: true });
     c.commands = K.discover(D.intWt, o.checks, root).commands || [];
-    c.baseline = await runChecks(c);
-    if (c.baseline) event(root, fid, { event: 'baseline', ok: c.baseline.ok, pass: c.baseline.pass, fail: c.baseline.fail });
+    // 통합 기준선은 카드 작업과 동시에 잰다 — 첫 합류만 그것을 기다린다(예전엔 전체 검사가 끝날 때까지 카드가 시작하지 않았다)
+    c.baselineP = runChecks(c).then(b => { c.baseline = b; if (b) event(root, fid, { event: 'baseline', ok: b.ok, pass: b.pass, fail: b.fail }); return b; });
     // 3) 카드 일정 — 의존이 모두 합쳐진 카드를 동시 상한까지
     await schedule(c);
     // 4) 검증 라인(PRD R6) — 합쳐진 결과를 여러 시험 에이전트가 나눠 시험 · 재현된 결함은 수정 카드로 같은 합류 대기열에
-    if (o.verify !== false && run.cards.some(x => x.status === 'merged') && !run.stop_requested) {
+    // 시험 웨이브(모델이 찾고 모델이 확인)는 --verify 일 때만 — thin 원칙: 하네스는 판정자로 나서지 않는다(효과를 평가로 보이기 전까지)
+    if (o.verify === true && run.cards.some(x => x.status === 'merged') && !run.stop_requested) {
       run.stage = 'verify'; save(root, run);
       await require('./verify').run(c, { schedule: () => schedule(c), save: () => save(root, run), event: e => event(root, fid, e), spent: () => spent(c) });
     }

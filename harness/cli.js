@@ -10,12 +10,14 @@ const USAGE = `usage:
                      [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--base <branch>] [--root <repo>] [--init] [--doc <path>]... [--attach <file>]... [--owns <glob>]...
       --goal-file <path>: the goal verbatim from a UTF-8 file · "-": the goal from stdin (no shell quoting of the request)
       --init: create a git repository at --root if there is none (otherwise refused)
+      --mode thin|full: thin = the worker plans, tests and records by itself; the harness keeps only the guard, the worktree, cleanup and one run of the checks at the end, recorded for the reviewer (never sent back; worse than before = failed) (default: thin) · full = the old way: baseline before the task, lint and quality send-back, repeated send-backs on failure — or "mode: full" in the project yaml
+      --eager-baseline: measure the checks on the base commit before the first turn (default: only when the checks fail afterwards — or "baseline: eager" in the project yaml) · --fresh-baseline: ignore the cached baseline
       --doc <path>: a managed document (docs/prds · docs/coordinations · docs/designs) the worker reads as the specification (repeatable)
       --owns <glob>: the only paths this task may change (repeatable, e.g. --owns "src/billing/**" --owns "tests/billing/**") — the guard blocks writes elsewhere so parallel tasks do not collide
       --attach <file>: give the worker a file with the goal — image · video (frames + transcript) · audio (transcript) · PDF · document (repeatable)
       --allow "<rule>": also let the unattended worker run this, e.g. --allow "Bash(docker build:*)" (repeatable; added to the project
                         block's worker_allow; Tool one of Bash|PowerShell|Read|Edit|Write|WebFetch; git writes · shells · Bash(*) are refused; no effect on Codex)
-  node harness/cli.js resume <id> [--allow "<rule>"]... [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--model M] [--effort E]
+  node harness/cli.js resume <id> [--allow "<rule>"]... [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--model M] [--effort E] [--fresh-session]
       caps are totals for the whole task (not additions): pass the new total, e.g. --budget-usd 40 after $20 was spent
       a blocked task resumes in the same session: its BLOCKED.md is kept as BLOCKED.<n>.md and the worker is told what you allowed
       --note "<text>" | --note-file <path>: also hand the worker these additional instructions (a done task with new notes can be resumed)
@@ -26,6 +28,7 @@ const USAGE = `usage:
   node harness/cli.js wait <id> [--timeout-min N]   (waits until the task is no longer running, then prints its report · exit 3 if still running at the limit)
   node harness/cli.js status [--json]
   node harness/cli.js metrics [--roots "<저장소>;<저장소>…"] [--since YYYY-MM-DD] [--jsonl <out>] [--md <out>] [--json]   (작업 수치 — 비용 · 효율 · 계획 · 시험 · 찌꺼기 · 품질)
+  node harness/cli.js profile [--build [--roots "<저장소>;<저장소>…"] [--since YYYY-MM-DD]] [--json]   (사용자 판단 패턴 — 갈림길에서 작업자가 따른다)
   node harness/cli.js accept <id> [--into <branch>] [--force] [--budget-usd N]   (only after the user accepts the result; --force for tasks not 'done')
   node harness/cli.js cancel <id> [--skip-checks]
   node harness/cli.js restore <id> [--skip-checks]
@@ -42,15 +45,15 @@ const USAGE = `usage:
   node harness/cli.js doc index | doc check [--json] | doc history <path> [--json] | doc restore <path> <version>
   node harness/cli.js doc adopt <path> [--status draft|active|done] [--with <project>] [--direction outgoing|incoming]   (bring an existing doc under management)
       documents are created only when the user asks; nothing is generated automatically
-  node harness/cli.js factory "<request>" | --request-file <path> [--jobs N] [--budget-usd N] [--card-budget-usd N] [--max-cards N] [--test-agents N] [--waves N] [--no-verify] [--base <branch>] [--detach|--foreground]
+  node harness/cli.js factory "<request>" | --request-file <path> [--jobs N] [--budget-usd N] [--card-budget-usd N] [--max-cards N] [--test-agents N] [--waves N] [--verify] [--base <branch>] [--detach|--foreground]
       split the request into cards (planner agent) · run the cards as parallel tasks with owned paths · merge them one at a time into harness/factory/<id> · then testers (charters) test the merged result, defects reproduced by another agent become fix cards
   node harness/cli.js factory status [<id>] | factory wait <id> | factory stop <id> | factory accept <id>   (accept merges into your branch — only after the user says so)
   node harness/cli.js help
 defaults: runtime claude · model opus · budget $20 · wall 120 min · max continuations 8 (with --runtime codex and no --model: Codex's own default model)`;
 
 const VALUE = new Set(['--check', '--runtime', '--model', '--effort', '--budget-usd', '--token-budget', '--wall-min', '--max-continuations', '--root', '--into', '--base', '--target', '--check-timeout-min', '--goal-file',
-  '--jobs', '--test-agents', '--waves', '--max-cards', '--card-budget-usd', '--request-file', '--owns', '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--roots', '--since', '--jsonl', '--md', '--tag', '--timeout-min', '--file', '--note', '--note-file']);
-const FLAGS = new Set(['--no-verify', '--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs', '--detach', '--foreground']);
+  '--jobs', '--test-agents', '--waves', '--max-cards', '--card-budget-usd', '--request-file', '--owns', '--doc', '--with', '--direction', '--from-file', '--status', '--by', '--allow', '--attach', '--sent', '--repo', '--kind', '--title', '--body', '--body-file', '--roots', '--since', '--jsonl', '--md', '--tag', '--timeout-min', '--file', '--note', '--note-file', '--transcripts', '--mode']);
+const FLAGS = new Set(['--no-verify', '--auto', '--open', '--json', '--help', '-h', '--uninstall', '--dry-run', '--force', '--init', '--skip-checks', '--fresh-baseline', '--apply', '--salvage', '--track-docs', '--detach', '--foreground', '--fresh-session', '--build', '--eager-baseline', '--verify']);
 
 function parse(argv) {
   const o = { _: [], checks: [], docs: [], allow: [], attach: [], owns: [] };
@@ -76,7 +79,7 @@ function parse(argv) {
   };
   if (o.runtime && !['claude', 'codex'].includes(o.runtime)) throw new Error('--runtime must be claude or codex');
   return { ...o, budgetUsd: num('budget-usd', 0), tokenBudget: num('token-budget', 0, true), wallMin: num('wall-min', 0),
-    maxContinuations: num('max-continuations', -1, true), checkTimeoutMs: o['check-timeout-min'] != null ? num('check-timeout-min', 0) * 60000 : undefined, freshBaseline: !!o['fresh-baseline'] };
+    maxContinuations: num('max-continuations', -1, true), checkTimeoutMs: o['check-timeout-min'] != null ? num('check-timeout-min', 0) * 60000 : undefined, freshBaseline: !!o['fresh-baseline'], eagerBaseline: !!o['eager-baseline'] };
 }
 
 const OK = new Set(['done', 'accepted', 'cancelled', 'restored']);
@@ -96,7 +99,7 @@ async function main(argv, io) {
   const [cmd, ...rest] = o._;
   if (!cmd || cmd === 'help' || o.help || o.h) { out(USAGE); return cmd || o.help || o.h ? 0 : 2; }
   const root = o.root ? path.resolve(o.root) : process.cwd();
-  const common = { root, log: err, run: io && io.run, checkTimeoutMs: o.checkTimeoutMs };
+  const common = { root, log: err, run: io && io.run, checkTimeoutMs: o.checkTimeoutMs, freshBaseline: o.freshBaseline, eagerBaseline: o.eagerBaseline, mode: o.mode };
   // 자동 갱신 확인(설치된 사본 · 하루 한 번 · 별도 프로세스) — 갱신 · 설치 명령 자신은 빼고. 실패는 조용히.
   if (!['install', 'uninstall', 'update', 'version'].includes(cmd)) { try { require('./lib/autoupdate').maybe(root); } catch { /* 하네스를 멈추지 않는다 */ } }
 
@@ -185,6 +188,25 @@ async function main(argv, io) {
       return 0;
     } catch (e) { err(`harness metrics: ${e.message}`); return 1; }
   }
+  // profile — 사용자 판단 패턴. --build 는 이 PC 의 대화 기록 · 하네스 작업에서 다시 만들어 ~/.harness/profile.json 에 둔다(밖으로 보내지 않는다).
+  //   저장된 패턴은 작업 지시의 "갈림길" 규칙에 붙는다 — 작업자가 묻지 않고 이 사용자처럼 고른다.
+  if (cmd === 'profile') {
+    const Pf = require('./lib/profile');
+    try {
+      let p;
+      if (o.build) {
+        const roots = o.roots ? String(o.roots).split(';').map(x => x.trim()).filter(Boolean).map(r => path.resolve(r)) : [root];
+        p = Pf.build({ roots, since: o.since, transcripts: o.transcripts });
+        const file = Pf.save(p);
+        if (!o.json) out(`저장: ${file}`);
+      } else {
+        p = Pf.load();
+        if (!p) { out('판단 패턴이 아직 없습니다 — node harness/cli.js profile --build [--roots "<저장소>;<저장소>…"]'); return 0; }
+      }
+      out(o.json ? JSON.stringify({ sources: p.sources, tasks: p.tasks, rules: p.rules }, null, 2) : Pf.format(p));
+      return 0;
+    } catch (e) { err(`harness profile: ${e.message}`); return 1; }
+  }
   if (cmd === 'status' || cmd === 'gc') {
     const St = require('./lib/status');
     try {
@@ -266,7 +288,7 @@ async function main(argv, io) {
         require('./lib/loop').addNote(S.mainRoot(root), id, o['note-file'] != null ? fs.readFileSync(path.resolve(o['note-file']), 'utf8') : o.note);
       }
       if (canDetach()) return detach(cmd, argv, id, null, root, out, err, !o.detach);
-      r = await require('./lib/loop').resume({ ...common, ...caps, id, allow: o.allow });
+      r = await require('./lib/loop').resume({ ...common, ...caps, id, allow: o.allow, freshSession: !!o['fresh-session'] });
     }
     else if (cmd === 'accept') r = await require('./lib/integrate').accept({ ...common, id: needId(), into: o.into, budgetUsd: o.budgetUsd, force: !!o.force });
     else if (cmd === 'cancel') r = await require('./lib/integrate').cancel({ ...common, id: needId(), skipChecks: !!o['skip-checks'] });
@@ -479,8 +501,8 @@ async function factoryCommand(rest, o, root, out, err, io, argv) {
   if (!request) { err(`factory needs a request\n${USAGE}`); return 2; }
   const opts = { root: main, request, jobs: o.jobs != null ? Number(o.jobs) : undefined, budgetUsd: o['budget-usd'] != null ? Number(o['budget-usd']) : undefined,
     cardBudgetUsd: o['card-budget-usd'] != null ? Number(o['card-budget-usd']) : undefined, maxCards: o['max-cards'] != null ? Number(o['max-cards']) : undefined,
-    base: o.base, model: o.model, runtime: o.runtime, checks: o.checks.length ? o.checks : undefined, run: io && io.run, log: m => err(m),
-    verify: !o['no-verify'], testAgents: o['test-agents'] != null ? Number(o['test-agents']) : undefined, waves: o.waves != null ? Number(o.waves) : undefined };
+    base: o.base, model: o.model, runtime: o.runtime, mode: o.mode, checks: o.checks.length ? o.checks : undefined, run: io && io.run, log: m => err(m),
+    verify: !!o.verify && !o['no-verify'], testAgents: o['test-agents'] != null ? Number(o['test-agents']) : undefined, waves: o.waves != null ? Number(o.waves) : undefined };
   for (const k of ['jobs', 'budgetUsd', 'cardBudgetUsd', 'maxCards']) if (opts[k] != null && !(opts[k] > 0)) { err(`--${k} must be a number > 0`); return 2; }
   if (child || (io && io.run) || o.foreground) {
     const fid = child ? process.env.HARNESS_FACTORY_ID : undefined;

@@ -208,7 +208,7 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
 
     // ── [M3] done 이 아닌 작업은 --force 없이 accept 거부 ─────────────────
     const r9 = mkRepo();
-    const t9 = await L.go({ ...quiet, root: r9, goal: 'never works', checks: ['node check.js'], run: fake([o => { write(path.join(o.cwd, 'half.txt'), 'x\n'); }]) });
+    const t9 = await L.go({ ...quiet, mode: 'full', root: r9, goal: 'never works', checks: ['node check.js'], run: fake([o => { write(path.join(o.cwd, 'half.txt'), 'x\n'); }]) });
     const main9 = git(r9, ['rev-parse', 'main']);
     const a9 = await I.accept({ ...quiet, root: r9, id: t9.id });
     R.check('[IN-11][M3] stalled 작업: 거부 · 이유가 상태와 실패 이유로 시작 · --force 안내 · main 그대로', t9.status === 'stalled' && a9.refused === true && a9.reason.startsWith(`task status is stalled (${t9.reason.slice(0, 20)}`) && /--force/.test(a9.reason) && git(r9, ['rev-parse', 'main']) === main9,
@@ -250,7 +250,7 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     const r12 = mkRepo({ check: CHECK_ENV_JS, files: ENV_FILES, untracked: { '.env': 'TOKEN=1\n' } });
     const t12 = await goDone(r12, work(null));
     const a12 = await I.accept({ ...quiet, root: r12, id: t12.id });
-    R.check('[IN-14] 준비: 의존성(.env) 검사 저장소에서 done → accepted', t12.status === 'done' && a12.status === 'accepted' && S.readTask(r12, t12.id).checks.baseline.fail === 1, `${t12.status} ${t12.reason} ${a12.reason}`);
+    R.check('[IN-14] 준비: 의존성(.env) 검사 저장소에서 done → accepted', t12.status === 'done' && a12.status === 'accepted' && [null, undefined].includes(S.readTask(r12, t12.id).checks.baseline) || S.readTask(r12, t12.id).checks.baseline.fail === 1, `${t12.status} ${t12.reason} ${a12.reason}`);
     const c12 = await I.cancel({ ...quiet, root: r12, id: t12.id });
     R.check('[IN-14][M7] 병합 후 cancel: 임시 revert worktree 에 .env 가 복사되어 검사가 환경 탓으로 빨개지지 않는다', c12.status === 'cancelled' && !c12.refused && read(path.join(r12, 'feature.txt')) === null, `${c12.status} ${c12.reason}`);
     const rs12 = await I.restore({ ...quiet, root: r12, id: t12.id });

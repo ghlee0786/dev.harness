@@ -13,7 +13,7 @@ const R = makeReporter('린트 — lint_command · {files} · 기준선 · 보�
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-v5-lint-'));
 const write = (f, t) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); };
 const git = (cwd, ...a) => (spawnSync('git', a, { cwd, encoding: 'utf8', windowsHide: true }).stdout || '').trim();
-const quiet = { log: () => {} };
+const quiet = { log: () => {}, mode: 'full' };   // 린트 · 중복 · 품질 되돌려 보내기는 full 모드의 기능(기본 thin 은 보고만)
 // 린트: 인자로 받은 .js 파일(없으면 저장소의 모든 .js) 중 console.log 가 있으면 실패.
 const LINT_JS = `const fs=require('fs'),p=require('path');let files=process.argv.slice(2);
 if(!files.length){const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.name.startsWith('.')||e.name==='node_modules'?[]:e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);files=walk('.');}

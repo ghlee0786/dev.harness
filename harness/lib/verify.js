@@ -85,7 +85,7 @@ async function run(c, h) {
     let charters = [];
     try {
       const diff = G.diffNames(root, fr.base_commit, c.branch).filter(f => !f.startsWith('.harness/'));
-      const r = await o.run({ runtime: o.runtime || 'claude', cwd: wt, prompt: strategistPrompt(fr, diff, v0.testAgents, focus), newSessionId: crypto.randomUUID(), model: o.model || 'opus',
+      const r = await o.run({ runtime: o.runtime || 'claude', cwd: wt, prompt: strategistPrompt(fr, diff, v0.testAgents, focus), newSessionId: crypto.randomUUID(), model: o.model || ((o.runtime || 'claude') === 'claude' ? 'opus' : null),
         budgetUsd: 3, timeoutMs: 20 * 60 * 1000, allowCommands: [], allowRules: [], workerPermissions: 'strict', systemAppend: '' });
       V.cost_usd += Number(r && r.cost_usd) || 0;
       const p = parseJson(r && r.final_text);

@@ -46,7 +46,8 @@ function fake(steps) {
 }
 const impl = v => o => { write(path.join(o.cwd, 'impl.txt'), v + '\n'); };
 const plan = (o, id) => write(path.join(o.cwd, '.harness', id, 'PLAN.md'), '# plan\n- [x] done\n');
-const quiet = { log: () => {} };
+// 기존 테스트는 작업 전 기준선(eager)을 전제로 쓰였다 — 그 경로를 계속 지킨다. 기본인 늦은 기준선(lazy)은 LP-LZ 가 따로 잰다.
+const quiet = { log: () => {}, mode: 'full', eagerBaseline: true };   // 이 파일은 full 모드의 루프(반복 되돌려 보내기 · 정체 · 기준선)를 본다 — thin 은 test_v5_thin.js
 const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good', checks: ['node check.js'], ...extra });
 
 (async () => {
@@ -108,7 +109,8 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     R.check('[LP-04] 새 worktree 에 저장소 파일이 있다', seenInclude === true);
     R.check('[LP-04] 결과 브랜치에 커밋(impl.txt · PLAN.md) · 사용자 브랜치는 그대로', git(r1, ['show', `${t1.branch}:impl.txt`]) === 'good' && git(r1, ['show', `${t1.branch}:.harness/${a.id}/PLAN.md`]).startsWith('# plan')
       && git(r1, ['rev-parse', 'main']) === mainHead && !fs.existsSync(path.join(r1, 'impl.txt')) && git(r1, ['status', '--porcelain']) === '');
-    R.check('[LP-04] 체크포인트 커밋 메시지 harness(<id>): checkpoint 1', git(r1, ['log', '-1', '--format=%s', t1.branch]) === `harness(${a.id}): checkpoint 1` && t1.commits.length === 1);
+    // [2026-10-21] 예전 "checkpoint 1" 로는 git log 에서 무엇을 왜 했는지 알 수 없었다 — 제목은 턴 + 작업자 보고 첫 줄, 본문은 보고
+    R.check('[LP-04] 턴 커밋 메시지: 제목 harness(<id>): turn 1: <보고 첫 줄> · 커밋 1개', git(r1, ['log', '-1', '--format=%s', t1.branch]) === `harness(${a.id}): turn 1: Done.` && t1.commits.length === 1, git(r1, ['log', '-1', '--format=%s', t1.branch]));
     R.check('[LP-04] worktree 는 커밋 뒤 제거된다', !fs.existsSync(path.join(r1, '.harness-worktrees', a.id)) && a.worktree === null && !git(r1, ['worktree', 'list']).includes(a.id));
     R.check('[LP-04] 기준선 기록(빨강 1) · 마지막 검사(초록)', t1.checks.baseline.ok === false && t1.checks.baseline.fail === 1 && t1.checks.last.ok === true && t1.checks.source === 'user');
     R.check('[LP-04] 보고: 상태 · 브랜치@커밋 · 검사 · 바뀐 파일 수 · 기존 테스트 · git 밖 · 비용 · accept/cancel', /DONE/.test(a.report) && a.report.includes(`${t1.branch} @ `) && /last: PASS/.test(a.report) && /changed files: 1/.test(a.report)
@@ -191,6 +193,35 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
     R.check('[LP-10] resume 은 기존 작업 기록을 이어 쓴다(커밋 누적 · 비용 누적)', S.readTask(r9, intr.id).commits.length === 2 && res.cost_usd === 1);
     const again = await L.resume({ ...quiet, root: r9, id: intr.id, run: fake([impl('x')]) });
     R.check('[LP-10] done 인 작업은 resume 하지 않는다', again.refused === true && again.status === 'done');
+
+    // ── 늦은 기준선(기본 · D2): 검사가 통과하면 기준선을 재지 않는다 · 원래부터 실패하던 저장소면 그때 작업 시작 시점에서 잰다 ──
+    //   [2026-10-21 평가 2단계] 빠른 모델은 맨 실행 2~8분인데 하네스가 작업 전 전체 테스트에 17~44분을 써 상한에 걸렸다.
+    const lazyQ = { log: () => {} };
+    const rLz = checkRepo();
+    let checkRunsBeforeTurn = null;
+    const fLz = fake([o => { checkRunsBeforeTurn = !!S.readTask(rLz, path.basename(o.cwd)).checks.baseline; impl('good')(o); }]);
+    const aLz = await L.go({ ...lazyQ, root: rLz, goal: 'make impl.txt say good', checks: ['node check.js'], run: fLz });
+    const tLz = S.readTask(rLz, aLz.id);
+    R.check('[LP-LZ1] 기본(lazy): 첫 턴 전에 기준선을 재지 않고 · 검사가 통과하면 끝까지 기준선 없이 done · 임시 기준선 worktree 없음',
+      aLz.status === 'done' && checkRunsBeforeTurn === false && !tLz.checks.baseline && tLz.checks.baseline_mode === 'lazy' && !fs.existsSync(path.join(rLz, '.harness-worktrees', `${aLz.id}-base`)),
+      JSON.stringify({ st: aLz.status, before: checkRunsBeforeTurn, b: tLz.checks.baseline, mode: tLz.checks.baseline_mode }));
+    // 원래부터 실패하던 저장소: 저장소에서 찾은 검사(npm test)가 작업 전부터 1개 실패 — 작업이 그 실패를 늘리지 않으면 not_worse 로 done
+    const rLz2 = mkRepo({ 'package.json': JSON.stringify({ scripts: { test: 'node check.js' } }), 'check.js': "console.log('# pass 1\\n# fail 1');process.exit(1);\n", 'README.md': '# r\n' });
+    const aLz2 = await L.go({ ...lazyQ, root: rLz2, goal: 'add docs', run: fake([o => { write(path.join(o.cwd, 'docs.md'), '# d\n'); }]) });
+    const tLz2 = S.readTask(rLz2, aLz2.id);
+    R.check('[LP-LZ2] lazy · 원래 빨간 저장소: 검사 실패 → 그때 작업 시작 시점(별도 worktree)에서 기준선을 재 not_worse 로 done · 기준선 worktree 는 지운다',
+      aLz2.status === 'done' && tLz2.checks.baseline && tLz2.checks.baseline.fail === 1 && tLz2.checks.verdict === 'not_worse' && !fs.existsSync(path.join(rLz2, '.harness-worktrees', `${aLz2.id}-base`)) && !git(rLz2, ['worktree', 'list']).includes(`${aLz2.id}-base`),
+      JSON.stringify({ st: aLz2.status, r: aLz2.reason, b: tLz2.checks.baseline, v: tLz2.checks.verdict }));
+
+    // ── 새 세션 이어 가기(--fresh-session): 이전 대화 없이 기록만으로 — 평가 2단계 C 칸 · 대화 맥락이 사라진 현장 ──
+    const r9f = checkRepo();
+    const intrF = await go(r9f, { run: fake([o => { impl('half')(o); return { is_error: true, error_kind: 'quota', error_message: "You've hit your usage limit", session_id: 'S-old' }; }]), quotaWait: false });
+    const f9f = fake([impl('good')]);
+    const resF = await L.resume({ ...quiet, root: r9f, id: intrF.id, run: f9f, freshSession: true });
+    const tF = S.readTask(r9f, intrF.id), cF = f9f.calls[0] || {};
+    R.check('[LP-10f] --fresh-session: 이전 세션을 잇지 않고 새 세션 · 목표 전체 + "이어 가기" 지시(PLAN · DECISIONS · git 을 먼저 읽어라) → done · 이전 세션 id 기록',
+      resF.status === 'done' && !cF.sessionId && !!cF.newSessionId && /# Goal/.test(cF.prompt || '') && /# Continuing earlier work/.test(cF.prompt || '') && /PLAN\.md/.test(cF.prompt || '') && (tF.previous_sessions || []).includes('S-old'),
+      JSON.stringify({ st: resF.status, sid: cF.sessionId, nsid: !!cF.newSessionId, prev: tF.previous_sessions }));
 
     // ── 주인 생존 거부 · 죽은 주인은 빼앗는다 ──────────────────────────
     const r10 = checkRepo();
