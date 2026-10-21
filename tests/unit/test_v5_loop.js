@@ -196,7 +196,7 @@ const go = (root, extra) => L.go({ ...quiet, root, goal: 'make impl.txt say good
 
     // ── 늦은 기준선(기본 · D2): 검사가 통과하면 기준선을 재지 않는다 · 원래부터 실패하던 저장소면 그때 작업 시작 시점에서 잰다 ──
     //   [2026-10-21 평가 2단계] 빠른 모델은 맨 실행 2~8분인데 하네스가 작업 전 전체 테스트에 17~44분을 써 상한에 걸렸다.
-    const lazyQ = { log: () => {} };
+    const lazyQ = { log: () => {}, mode: 'full' };   // 늦은 기준선은 full 모드의 작업 중 검사(thin 은 작업 중에 재지 않고 accept · check 가 같은 기준선을 쓴다)
     const rLz = checkRepo();
     let checkRunsBeforeTurn = null;
     const fLz = fake([o => { checkRunsBeforeTurn = !!S.readTask(rLz, path.basename(o.cwd)).checks.baseline; impl('good')(o); }]);

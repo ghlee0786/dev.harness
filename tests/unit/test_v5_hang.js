@@ -73,7 +73,7 @@ const FAKE_HANG = { applies: () => true, next: Langs.byId.get('python').hang.nex
       write(path.join(d, 'pytest.ini'), '[pytest]\naddopts = -p no:cacheprovider\n');
       write(path.join(d, 'tests', 'test_a.py'), 'import time\n\ndef test_ok():\n    assert 1 + 1 == 2\n\ndef test_device():\n    time.sleep(10**6)\n\ndef test_ok2():\n    assert True\n');
       git(d, 'add', '-A'); git(d, 'commit', '-qm', 'init');
-      const t = await L.go({ ...quiet, root: d, goal: 'README 를 더하라', run: async o => { write(path.join(o.cwd, 'README.md'), '# x\n'); return ok(o); } });
+      const t = await L.go({ ...quiet, mode: 'full', root: d, goal: 'README 를 더하라', run: async o => { write(path.join(o.cwd, 'README.md'), '# x\n'); return ok(o); } });
       const task = S.readTask(d, t.id);
       R.check('[HG-05] 실제 pytest — 기준선에서 멈춘 test_device 를 빼고 검사를 지킨다(버리지 않음) · 작업은 done',
         t.status === 'done' && (task.checks.hung || []).some(h => /tests\/test_a\.py::test_device$/.test(h.test)) && !(task.checks.dropped || []).length && task.checks.commands.length === 1 && task.checks.commands[0].includes('--deselect'),

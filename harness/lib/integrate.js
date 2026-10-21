@@ -249,6 +249,7 @@ async function accept(o) {
       if (v.verdict !== 'fail') return null;
       commitInto(task, P.wt, 'checks after bringing target up to date');
       S.writeTask(root, task);
+      if (why === 'deferred checks (thin)') return refused(task, `checks fail on ${task.branch} and are worse than before the task (${j.fail} failing) — resume or fix it, then accept again (or --force if you accept the failures)`);
       return refused(task, `checks fail after bringing ${target} into ${task.branch} (${j.fail} failing) — the task branch now contains ${target}; resume or fix it, then accept again`);
     };
     let rounds = 0;
@@ -270,6 +271,10 @@ async function accept(o) {
     //   --force(사용자가 실패를 알고 병합)면 다시 재지 않는다.
     if (!broughtTarget && !o.force && task.checks.commands.length && task.checks.last && K.judge(task.checks.last, task.checks.baseline, { notWorse: task.checks.source !== 'user' }).verdict === 'fail') {
       const no = await checkHere('last recorded checks failed'); if (no) return no;
+    }
+    // thin: 작업이 끝 검사를 미뤘다 — 합치기 전에 여기서 처음 잰다(실패면 기준선과 비교해 나빠졌을 때만 막는다). --force 면 재지 않는다.
+    if (!broughtTarget && !o.force && task.checks.commands.length && task.checks.deferred && !task.checks.last) {
+      const no = await checkHere('deferred checks (thin)'); if (no) return no;
     }
     // 린트 — 대상 브랜치를 들인 뒤에도 작업이 바꾼 파일에서 다시 본다(루프에서 통과했어도 그 뒤의 커밋 · 대상 브랜치가 깨뜨릴 수 있다).
     //   [2026-10-14 자동 이슈 #3] 새로 만든 worktree 는 빌드 · 복원 산출물이 없어(--no-restore 린트) 루프에서 통과한 린트가 거절됐다.
@@ -512,4 +517,28 @@ async function restore(o) {
   });
 }
 
-module.exports = { accept, cancel, restore, dirtyOverlap, archivePlan, conflictBudget };
+// check <id> — 결과 브랜치에서 저장소 검사를 지금 돌려 기록한다(합치지 않는다). thin 작업의 미룬 검사를 accept 전에 미리 보는 길.
+//   실패면 작업 시작 시점의 기준선과 비교한다(원래부터 실패 = 나빠지지 않음). 기록된 결과는 accept 가 그대로 쓴다(나빠졌으면 다시 재고 막는다).
+async function check(o) {
+  const { root, task: task0, P, log } = load(o);
+  if (!['done', 'failed', 'interrupted', 'capped', 'blocked', 'stalled'].includes(task0.status)) return refused(task0, `task status is ${task0.status} — check runs on finished work`);
+  return withTaskLock(root, task0, async () => {
+    const task = S.readTask(root, task0.id);
+    if (!(task.checks && task.checks.commands && task.checks.commands.length)) return out(task, { status: 'checked', report: `pilot ${task.id} — no checks found for this repository` });
+    const wtWhy = ensureWorktree(root, task, P, o.removalWaitMs, log);
+    if (wtWhy) return refused(task, wtWhy);
+    const run1 = async () => (await K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: checkTimeout(task, o), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null })).judged;
+    let j = await run1();
+    if (!j.ok && !task.checks.baseline && task.checks.source !== 'user') { const before = JSON.stringify(task.checks.commands); await L.ensureBaseline(root, task, { o: { checkTimeoutMs: checkTimeout(task, o) }, log }); if (JSON.stringify(task.checks.commands) !== before) j = await run1(); }
+    task.checks.last = K.brief(j);
+    const v = K.judge(j, task.checks.baseline, { notWorse: task.checks.source !== 'user' });
+    task.checks.verdict = v.verdict;
+    S.log(root, task.id, { event: 'checks', phase: 'check', verdict: v.verdict, pass: j.pass, fail: j.fail });
+    S.writeTask(root, task);
+    const ko = task.language === 'Korean';
+    const head = `pilot ${task.id} — ${ko ? '검사' : 'CHECKS'}: ${v.verdict} (${j.pass} ${ko ? '통과' : 'pass'} / ${j.fail} ${ko ? '실패' : 'fail'})`;
+    return out(task, { status: v.verdict === 'fail' ? 'check-failed' : 'checked', verdict: v.verdict, report: [head, v.why, ...(v.verdict === 'fail' ? [K.failureExcerpt(j).slice(0, 1500)] : [])].filter(Boolean).join('\n') });
+  });
+}
+
+module.exports = { accept, cancel, restore, check, dirtyOverlap, archivePlan, conflictBudget };

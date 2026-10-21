@@ -514,8 +514,14 @@ async function loop(c, kind) {
     c.errorStreak = 0;
 
     let verdict = null;
-    if (task.checks.commands.length) {
-      const checkNow = () => K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: Math.min(c.o.checkTimeoutMs || task.checks.timeout_ms || K.CHECK_TIMEOUT_MS, Math.max(1000, deadline - Date.now() + 60000)), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null });
+    // thin: 끝 검사를 작업 시간에서 뺀다 — 검사는 accept 가 합치기 전에 돌리고(나빠졌으면 막는다), 미리 보려면 check <id>.
+    //   [평가 2단계 변경 11 · 2026-10-21] 작업자 턴은 맨 모델과 비슷했고(2~12분), 남은 차이는 모두 하네스의 끝 검사(+실패면 기준선)였다
+    //   (.NET 작은 수정 11.9분 · Python 막연한 요청 40분+). 취소할 작업은 검사 비용을 아예 쓰지 않는다.
+    if (task.checks.commands.length && task.mode === 'thin') {
+      task.checks.deferred = true;
+      S.writeTask(root, task);
+    } else if (task.checks.commands.length) {
+      const checkNow =() => K.runJudged(P.wt, K.commandsForJudge(P.wt, task.checks), { timeoutMs: Math.min(c.o.checkTimeoutMs || task.checks.timeout_ms || K.CHECK_TIMEOUT_MS, Math.max(1000, deadline - Date.now() + 60000)), rerun: task.checks.rerun, serialRoot: task.checks.serial ? root : null });
       let rj = await checkNow();
       // 늦은 기준선(D2): 실패했는데 아직 기준선이 없으면 지금 작업 시작 시점에서 잰다 — "원래부터 실패" 를 가리려고. 사용자가 준 검사는 기준선을 판정에 쓰지 않는다.
       //   기준선에서 멈춘 테스트를 떼어 내거나 시간 초과된 자동 검사를 빼 검사 명령이 바뀌었으면, 지금 상태도 같은 명령으로 다시 잰다.
@@ -611,6 +617,7 @@ async function loop(c, kind) {
     if (!changed.length) {
       return finish(c, 'failed', `no files changed outside .harness/ — ${!verdict ? 'there are no checks' : verdict.verdict === 'pass' ? 'the checks pass' : 'the checks are not worse'}, but nothing was done (the model was nudged once)`);
     }
+    if (!verdict && task.checks.deferred) return finish(c, 'done', 'the work is done; the checks run when it is accepted (thin)');
     if (!verdict) return finish(c, 'done', 'no trusted checks — finished on the model\'s own report (verify the evidence yourself)');
     return finish(c, 'done', verdict.why);
   }
@@ -802,6 +809,7 @@ function deniedLines(task) {
 //   명령 · 경로 · 브랜치 · 숫자는 원문 그대로. 이유(task.reason)는 하네스가 쓰는 문장만 옮기고, 모델 · 도구가 쓴 원문은 그대로 붙인다.
 const REASON_KO = [
   [/^all checks pass$/, () => '모든 검사 통과'],
+  [/^the work is done; the checks run when it is accepted \(thin\)$/, () => '작업 끝 — 검사는 accept 때 돈다(thin · 작업 전보다 나빠졌으면 accept 가 막는다)'],
   [/^no trusted checks — finished on the model's own report \(verify the evidence yourself\)$/, () => '신뢰할 검사 없음 — 모델의 보고로 끝났다(증거를 직접 확인하세요)'],
   [/^baseline was red — (.*)$/s, (m) => `작업 전부터 검사가 빨갰다 — ${m[1]}`],
   [/^the model reported the task cannot be done: (.*)$/s, (m) => `모델이 할 수 없다고 보고했다: ${m[1]}`],
@@ -838,7 +846,7 @@ function reportKo(task, P) {
   else {
     const last = ch.last, base = ch.baseline, pf = x => `${x.ok ? '통과' : '실패'} — ${x.pass} 통과 / ${x.fail} 실패`;
     L.push(`검사(${ch.source === 'user' ? '사용자가 준 것' : '저장소에서 찾은 것'}): ${ch.commands.map(K.display).join(' ; ')}`);
-    L.push(`  마지막: ${last ? pf(last) : '돌리지 않음'}${base ? ` · 작업 전 기준선: ${pf(base)}` : ''}`);
+    L.push(`  마지막: ${last ? pf(last) : ch.deferred ? '아직 안 돌림 — accept 때 돈다(미리 보기: node harness/cli.js check ' + task.id + ')' : '돌리지 않음'}${base ? ` · 작업 전 기준선: ${pf(base)}` : ''}`);
     if (ch.baseline_warning) L.push('  경고: 작업 전 검사가 읽을 수 있는 요약 없이 실패했다 — 새 worktree 의 환경 문제(의존성 미설치 등)일 수 있다. .worktreeinclude 에 필요한 파일을 적으세요');
     const cm = task.checks_modified || [];
     L.push(`작업이 고친 검사 정의: ${cm.length ? `${cm.join(', ')} — 확인하세요. 검사가 바뀌면 일을 하지 않고도 통과할 수 있다` : '없음'}`);
@@ -902,7 +910,7 @@ function report(task, P) {
   else {
     const last = ch.last, base = ch.baseline;
     lines.push(`checks (${ch.source}): ${ch.commands.map(K.display).join(' ; ')}`);
-    lines.push(`  last: ${last ? `${last.ok ? 'PASS' : 'FAIL'} — ${last.pass} pass / ${last.fail} fail` : 'not run'}${base ? ` · baseline before the task: ${base.ok ? 'PASS' : 'FAIL'} — ${base.pass} pass / ${base.fail} fail` : ''}`);
+    lines.push(`  last: ${last ? `${last.ok ? 'PASS' : 'FAIL'} — ${last.pass} pass / ${last.fail} fail` : ch.deferred ? 'not run yet — they run at accept (preview: node harness/cli.js check ' + task.id + ')' : 'not run'}${base ? ` · baseline before the task: ${base.ok ? 'PASS' : 'FAIL'} — ${base.pass} pass / ${base.fail} fail` : ''}`);
     if (ch.baseline_warning) lines.push(`  warning: ${ch.baseline_warning}`);
     const cm = task.checks_modified || [];
     lines.push(`check definitions modified by the task: ${cm.length ? `${cm.join(', ')} — review these; a changed check can pass without the work being done` : 'none'}`);

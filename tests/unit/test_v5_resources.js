@@ -98,7 +98,7 @@ function fakeDocker(state) {
     const r5 = repo({ 'AGENTS.md': '# p\n\n```yaml\ntest_command: "node check.js"\ncleanup_command: "node cleanup.js"\n```\n', 'check.js': CHECK,
       'cleanup.js': `require('fs').writeFileSync(${JSON.stringify(cleaned)}, process.env.HARNESS_DATA_NS);\n` });
     const run5 = async o => { write(path.join(o.cwd, 'feat.js'), 'module.exports = 1;\n'); return { ok: true, is_error: false, session_id: o.newSessionId || o.sessionId, final_text: 'ok', cost_usd: 0.01, permission_denials: [] }; };
-    const t5 = await L.go({ ...quiet, root: r5, goal: 'add feat', run: run5 });
+    const t5 = await L.go({ ...quiet, mode: 'full', root: r5, goal: 'add feat', run: run5 });
     let s5 = {}; try { s5 = JSON.parse(fs.readFileSync(seen, 'utf8')); } catch { /* 검사가 돌지 않았다 */ }
     const tmp5 = Res.tmpDirFor(r5, t5.id);
     R.check('[RS-04] 하네스 검사는 작업의 임시 폴더를 TEMP 로 · 데이터 구역 이름을 받는다', t5.status === 'done' && path.resolve(s5.TEMP || '') === path.resolve(tmp5) && s5.NS === Res.dataNs(t5.id), JSON.stringify({ status: t5.status, s5, tmp5 }));

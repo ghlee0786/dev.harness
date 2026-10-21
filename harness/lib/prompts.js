@@ -39,7 +39,7 @@ function checksLines(checks, mode) {
     return ['No automated checks were found for this repository. Verify your work yourself by running what is appropriate, and end with a short report of the evidence (commands you ran and their results).'];
   }
   const { display } = require('./checks');
-  return [mode === 'thin' ? 'When you finish, the harness runs these checks once from the worktree root and records the result (it does not send the work back):' : 'When you end your turn, the harness runs these checks from the worktree root and decides whether you are done:',
+  return [mode === 'thin' ? 'These are the repository checks — they run from the worktree root when your work is accepted (not when you finish), so run the relevant ones yourself:' :'When you end your turn, the harness runs these checks from the worktree root and decides whether you are done:',
     ...checks.commands.map(a => `- \`${display(a)}\``),
     'You can run them yourself. Make them pass by fixing the implementation; do not weaken, skip, or rewrite existing tests.',
     // [2026-09-30 실측 · Python 서비스 저장소] 원래 빨갛던 테스트(환경 의존) 때문에 모델이 BLOCKED 로 멈췄다 — 기준선을 알려 준다.
@@ -110,7 +110,7 @@ function repoLintLines(t) {
 function thinLines(t) {
   if (!t || t.mode !== 'thin') return [];
   return ['- Test as you go: run the tests that cover your change yourself (the relevant files first, then the wider suite if it is quick), read their output, and fix failures before you finish. Do not claim anything works unless you ran the command that shows it in this session — put the commands and their results in PLAN.md and your final report.',
-    '- When you finish, the harness runs the repository checks once and records the result for the person who reviews your work — it does not send the work back to you. So finish only when you have seen the relevant tests pass; if some failures were already there before your change, say which in your report and do not try to fix unrelated ones.'];
+    '- The harness does not check your work when you finish: the repository checks run when the work is accepted, and the work is refused if they are worse than before your change. So finish only when you have seen the relevant tests pass; if some failures were already there before your change, say which in your report and do not try to fix unrelated ones.'];
 }
 function profileLines() {
   try { return require('./profile').promptLines().slice(1).map((l, i) => i === 0 ? `- ${l.replace(/^# /, '')}:` : `  ${l}`); } catch { return []; /* 판단 패턴 파일이 깨졌으면 없이 간다 */ }

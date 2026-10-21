@@ -34,6 +34,7 @@ usage:
   node harness/cli.js accept <id> [--into <branch>] [--force] [--budget-usd N]   (only after the user accepts the result; --force for tasks not 'done')
   node harness/cli.js cancel <id> [--skip-checks]
   node harness/cli.js restore <id> [--skip-checks]
+  node harness/cli.js check <id>   (thin 작업의 미룬 검사를 지금 돌려 기록 — 합치지 않는다 · accept 가 그 결과를 쓴다)
   node harness/cli.js gc [--json]
   node harness/cli.js stop <id>                 (the way to stop a running task: ends its process tree, commits work in progress, status interrupted)
   node harness/cli.js push [<remote>] [<branch>] | push [<remote>] --tag <name> [--dry-run]   (only after the user explicitly asks; fast-forward only, never force, never harness/* branches)
@@ -84,7 +85,7 @@ function parse(argv) {
     maxContinuations: num('max-continuations', -1, true), checkTimeoutMs: o['check-timeout-min'] != null ? num('check-timeout-min', 0) * 60000 : undefined, freshBaseline: !!o['fresh-baseline'], eagerBaseline: !!o['eager-baseline'] };
 }
 
-const OK = new Set(['done', 'accepted', 'cancelled', 'restored']);
+const OK = new Set(['done', 'accepted', 'cancelled', 'restored', 'checked']);
 function resultLine(r) {
   const keep = ['id', 'status', 'reason', 'refused', 'branch', 'commit', 'base_branch', 'checks', 'cost_usd', 'unknown_cost_calls', 'tokens', 'continuations', 'wall_ms', 'files_changed',
     'tests_modified', 'checks_modified', 'secrets_excluded', 'commit_skipped', 'outside_git', 'worktree', 'merge_commit', 'revert_commit', 'task_status', 'docs'];
@@ -313,6 +314,7 @@ ${I.format(x.a)}`);
     else if (cmd === 'accept') r = await require('./lib/integrate').accept({ ...common, id: needId(), into: o.into, budgetUsd: o.budgetUsd, force: !!o.force });
     else if (cmd === 'cancel') r = await require('./lib/integrate').cancel({ ...common, id: needId(), skipChecks: !!o['skip-checks'] });
     else if (cmd === 'restore') r = await require('./lib/integrate').restore({ ...common, id: needId(), skipChecks: !!o['skip-checks'] });
+    else if (cmd === 'check') r = await require('./lib/integrate').check({ ...common, id: needId() });
     else { err(`unknown command: ${cmd}\n${USAGE}`); return 2; }
   } catch (e) {
     if (e.code === 'USAGE') { err(`${e.message}\n${USAGE}`); return 2; }
