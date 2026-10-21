@@ -1,4 +1,6 @@
-# dev.harness
+# Pilot (dev.pilot)
+
+> 모델이 조종하고, 하네스는 계기판(검사 기록)과 안전장치(guard · 격리 · 정리)만 맡는다. 예전 이름 dev.harness — 설치 폴더 `harness/` 와 명령 `node harness/cli.js` 는 그대로다.
 
 Claude Code · Codex 용 개발 하네스. **판정이 아니라 안전** — 모델이 일을 끝까지 하게 두고, 하네스는 격리 · git 안전망 · 정리를 맡고 저장소의 결정적 검사(테스트)를 끝에 한 번 돌려 기록한다.
 
@@ -13,8 +15,9 @@ Claude Code · Codex 용 개발 하네스. **판정이 아니라 안전** — �
 ## 설치 · 갱신
 
 ```bash
-git clone https://github.com/ghlee0786/dev.harness
-node dev.harness/harness/cli.js install --root <내 저장소>
+git clone https://github.com/ghlee0786/dev.pilot
+node dev.pilot/harness/cli.js install --root <내 저장소>
+# 또는 전역 명령: npm i -g github:ghlee0786/dev.pilot → pilot install --root <내 저장소> · pilot go "<요청>"
 ```
 
 `<내 저장소>` 에 `harness/` 사본 · `AGENTS.md` 관리 블록 · `CLAUDE.md` 의 `@AGENTS.md` · Claude Code / Codex 훅 · `harness` 스킬이 들어간다.
@@ -34,6 +37,7 @@ node dev.harness/harness/cli.js install --root <내 저장소>
 | `push [<remote>] [<branch>]` · `push [<remote>] --tag <이름>` | 빨리감기 push · 릴리스 태그 push(덮어쓰지 않는다) — 사용자가 명시한 뒤에만 |
 | `doc new <prd\|coordination\|design> "<제목>"` | 요청할 때만 만드는 관리 문서 |
 | `report --kind <bug\|intent\|improve> --title … --body …` | 하네스 보고(아래) |
+| `insights [--roots "a;b"] [--post]` | **사용 분석** — 작업 기록에서 하네스가 일을 방해한 패턴(thin 의 BLOCKED · failed 비율, 끝 검사가 차지하는 시간, 반복해서 거부된 명령, 검사 통과 뒤 취소, 도중 지시, 상한 · error · 찌꺼기)을 규칙으로 찾는다. 수치와 분류만 — 목표 · 경로 · 코드는 없다. 자동 갱신(하루 한 번) 뒤 7일에 한 번 돌고, 찾은 것은 가린 개선 이슈로 올라온다(`insights: off` 로 끈다) |
 | `update [--dry-run]` · `version` · `gc` · `cleanup-legacy` | 갱신 · 판 · 끝난 작업 정리 · 이전 하네스 잔여물 정리 |
 
 ## 무엇을 해 주나
@@ -80,6 +84,7 @@ worktree_links: ["../SiblingRepo"]       # 저장소 밖 형제 폴더를 참조
 outside_git_ok: ["data/*.db"]            # worktree 를 붙잡지 않는 런타임 부산물
 transcribe_command: "whisper \"{in}\" --output_dir \"{outdir}\""   # 전사기(없으면 faster-whisper · whisper 자동)
 bug_report: on                           # 하네스 보고 자동 발행(off 로 끈다)
+insights: on                             # 사용 분석 → 가린 개선 이슈(7일에 한 번 · off 로 끈다)
 auto_update: on                          # 최신 릴리스 자동 갱신(off 로 끈다)
 cleanup_command: "python scripts/drop_test_data.py"   # 작업을 치울 때 git 밖 시험 데이터 정리(HARNESS_DATA_NS · HARNESS_TASK_ID 를 받는다)
 quota_wait: on                           # 사용량 한도면 리셋까지 기다렸다 이어 감(off: 바로 interrupted) · quota_wait_max_min: 360

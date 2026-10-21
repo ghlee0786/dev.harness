@@ -1,9 +1,9 @@
 ---
 name: harness
-description: 무언가를 만들거나 고쳐 달라는 요청을 하네스 CLI(`node harness/cli.js go`)로 보내 자기 worktree 에서 끝까지 실행하고 보고를 전한다. 작업 결과 받아들이기(accept) · 취소(cancel) · 되살리기(restore) · 현황(status) 요청에도 쓴다.
+description: Pilot(하네스) — 무언가를 만들거나 고쳐 달라는 요청을 하네스 CLI(`node harness/cli.js go`)로 보내 자기 worktree 에서 끝까지 실행하고 보고를 전한다. 작업 결과 받아들이기(accept) · 취소(cancel) · 되살리기(restore) · 현황(status) 요청에도 쓴다.
 ---
 
-# harness — 요청을 하네스로 보내는 길잡이
+# Pilot(harness) — 요청을 하네스로 보내는 길잡이
 
 ## 만들거나 고쳐 달라는 요청
 1. 사용자 요청 **원문 그대로**를 임시 파일에 쓴다 — 셸 명령줄에 넣지 않는다(따옴표·`$(…)`·백틱이 셸에서 바뀌거나 실행된다).

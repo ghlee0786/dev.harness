@@ -155,7 +155,7 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     R.check('[IN-06][M3] 복원된 interrupted 작업은 --force 없이 accept 거부 · 이유가 상태와 원래 이유로 시작', ac4n.refused === true && /^task status is interrupted \(usage limit/.test(ac4n.reason) && /--force/.test(ac4n.reason) && git(r4, ['rev-parse', 'main']) === main4, `${ac4n.status} ${ac4n.reason}`);
     const ac4 = await I.accept({ ...quiet, root: r4, id: i4.id, force: true });
     R.check('[IN-06] 복원된 작업은 --force 로 다시 accept 할 수 있다', ac4.status === 'accepted' && read(path.join(r4, 'uncommitted.txt')) === 'not yet committed\n', ac4.reason);
-    R.check('[IN-06][M3] 강제 accept 보고는 실패 이유를 앞세운다', /^harness \S+ — ACCEPTED \(forced\) — the task was interrupted: usage limit/.test(ac4.report || ''), (ac4.report || '').split('\n')[0]);
+    R.check('[IN-06][M3] 강제 accept 보고는 실패 이유를 앞세운다', /^pilot \S+ — ACCEPTED \(forced\) — the task was interrupted: usage limit/.test(ac4.report || ''), (ac4.report || '').split('\n')[0]);
 
     // ── 취소된 작업의 accept 거부 · CLI ─────────────────────────────
     const r5 = mkRepo();
@@ -214,7 +214,7 @@ const parents = (cwd, ref) => git(cwd, ['rev-list', '--parents', '-n', '1', ref]
     R.check('[IN-11][M3] stalled 작업: 거부 · 이유가 상태와 실패 이유로 시작 · --force 안내 · main 그대로', t9.status === 'stalled' && a9.refused === true && a9.reason.startsWith(`task status is stalled (${t9.reason.slice(0, 20)}`) && /--force/.test(a9.reason) && git(r9, ['rev-parse', 'main']) === main9,
       `${t9.status} ${a9.status} ${a9.reason}`);
     const a9f = await I.accept({ ...quiet, root: r9, id: t9.id, force: true });
-    R.check('[IN-11][M3] --force 면 병합 · 보고 첫 줄이 실패 이유를 앞세운다', a9f.status === 'accepted' && parents(r9, 'main') === 2 && /^harness \S+ — ACCEPTED \(forced\) — the task was stalled: /.test(a9f.report), (a9f.report || a9f.reason).split('\n')[0]);
+    R.check('[IN-11][M3] --force 면 병합 · 보고 첫 줄이 실패 이유를 앞세운다', a9f.status === 'accepted' && parents(r9, 'main') === 2 && /^pilot \S+ — ACCEPTED \(forced\) — the task was stalled: /.test(a9f.report), (a9f.report || a9f.reason).split('\n')[0]);
 
     // ── [M13] 남은 예산이 없으면 충돌 해결을 시도하지 않고 거부 ────────────────
     const r13 = mkRepo();

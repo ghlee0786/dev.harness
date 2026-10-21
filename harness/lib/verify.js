@@ -95,7 +95,7 @@ async function run(c, h) {
     const W1 = { wave, charters: charters.map(x => ({ id: x.id, kind: x.kind, mission: x.mission.slice(0, 200) })), testers: charters.length, found: 0, unique_new: 0, confirmed: 0 };
     V.waves.push(W1); h.save();
     h.event({ event: 'verify_wave', wave, charters: charters.length });
-    c.log(`[harness] factory ${fr.id} — verify wave ${wave}: ${charters.length} testers`);
+    c.log(`[pilot] factory ${fr.id} — verify wave ${wave}: ${charters.length} testers`);
     if (!charters.length) break;
     // 2) 시험 — 차터마다 시험 작업(동시 상한 = 공장의 jobs)
     const results = await pool(charters, o.jobs, async ch => {

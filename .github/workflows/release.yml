@@ -33,8 +33,8 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"
           echo "$VER" > harness/VERSION
           mkdir -p dist
-          tar -czf "dist/harness-$VER.tar.gz" harness LICENSE README.md
-          zip -qr "dist/harness-$VER.zip" harness LICENSE README.md
+          tar -czf "dist/pilot-$VER.tar.gz" harness LICENSE README.md
+          zip -qr "dist/pilot-$VER.zip" harness LICENSE README.md
           (cd dist && sha256sum * > SHA256SUMS)
       - name: GitHub Release
         env:

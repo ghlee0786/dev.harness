@@ -7,7 +7,7 @@
 //   기록: <git-common-dir>/harness/bugs/<서명>.json · 보낸 것: bugs/reported.json
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 
-const DEFAULT_REPO = 'ghlee0786/dev.harness';
+const DEFAULT_REPO = 'ghlee0786/dev.pilot';   // [2026-10-21] dev.harness 에서 이름을 바꿨다 — GitHub 가 옛 주소를 새 주소로 넘겨 주므로 옛 판도 갱신 · 보고가 된다
 const MAX_URL = 7500;
 
 function bugsDir(root) { return path.join(require('./state').paths(root).harnessDir, 'bugs'); }

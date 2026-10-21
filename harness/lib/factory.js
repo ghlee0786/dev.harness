@@ -150,7 +150,7 @@ async function schedule(c) {
   const running = new Map();
   for (;;) {
     const now = readRun(root, fid) || run;
-    if (now.stop_requested && !run.stop_requested) { run.stop_requested = now.stop_requested; log(`[harness] factory ${fid} — stop requested: no new cards`); }
+    if (now.stop_requested && !run.stop_requested) { run.stop_requested = now.stop_requested; log(`[pilot] factory ${fid} — stop requested: no new cards`); }
     const byId = new Map(run.cards.map(x => [x.id, x]));
     for (const card of run.cards) if (card.status === 'pending' && card.depends_on.some(d => ['failed', 'skipped'].includes(byId.get(d).status))) { card.status = 'skipped'; card.reason = 'a card it depends on was not merged'; }
     const over = spent(c) >= o.budgetUsd;
@@ -191,7 +191,7 @@ async function start(o0) {
     jobs: o.jobs, budget_usd: o.budgetUsd, created_at: S.nowIso(), owner: S.ownerRecord(), cards: [], plan: null, plan_cost_usd: 0, language: /[가-힣]/.test(o.request || '') ? 'Korean' : null };
   if (!run.request) throw Object.assign(new Error('factory needs a request'), { code: 'USAGE' });
   save(root, run); event(root, fid, { event: 'created', base: base, base_commit: baseCommit });
-  log(`[harness] factory ${fid} — planning`);
+  log(`[pilot] factory ${fid} — planning`);
   const c = { root, run, o, log, branch: D.branch, intWt: D.intWt, commands: [], baseline: null, mergeLock: mutex(), checkTimeoutMs: (K.yamlNumber(root, 'check_timeout_min') || 15) * 60000 };
   try {
     // 1) 계획 — 기준 커밋의 분리 worktree 에서(작업자 권한은 읽기 전용 목록)
@@ -214,7 +214,7 @@ async function start(o0) {
     run.plan = { contracts: plan.contracts || '' };
     run.cards = plan.cards.map(x => ({ id: x.id, title: x.title || x.id, goal: x.goal, owns: x.owns, depends_on: x.depends_on, risk: x.risk || null, status: 'pending', attempts: 0 }));
     run.stage = 'build'; save(root, run);
-    log(`[harness] factory ${fid} — ${run.cards.length} cards${(run.serialized || []).length ? ` (serialized: ${run.serialized.join(', ')})` : ''} · jobs ${o.jobs}`);
+    log(`[pilot] factory ${fid} — ${run.cards.length} cards${(run.serialized || []).length ? ` (serialized: ${run.serialized.join(', ')})` : ''} · jobs ${o.jobs}`);
     // 2) 통합 브랜치 · worktree · 기준선 검사
     G.git(root, ['branch', '-f', D.branch, baseCommit]);
     G.git(root, ['worktree', 'add', '-f', D.intWt, D.branch], { retryLock: true });
@@ -243,14 +243,14 @@ function finish(c, log) {
   run.spent_usd = Math.round(spent(c) * 100) / 100;
   run.stage = 'done'; run.finished_at = S.nowIso(); save(root, run);
   event(root, run.id, { event: 'end', status: run.status, reason: run.reason, spent_usd: run.spent_usd });
-  log(`[harness] factory ${run.id} — ${run.status}`);
+  log(`[pilot] factory ${run.id} — ${run.status}`);
   return { id: run.id, status: run.status, reason: run.reason, report: report(root, run) };
 }
 
 // ── 보고 · 상태 · 멈춤 ───────────────────────────────────────────────────────
 function report(root, run) {
   const ko = run.language === 'Korean', cli = 'node harness/cli.js';
-  const L = [`harness factory ${run.id} — ${String(run.status).toUpperCase()}`, `${ko ? '이유' : 'why'}: ${run.reason || ''}`,
+  const L = [`pilot factory ${run.id} — ${String(run.status).toUpperCase()}`, `${ko ? '이유' : 'why'}: ${run.reason || ''}`,
     `${ko ? '요구' : 'request'}: ${String(run.request).replace(/\s+/g, ' ').slice(0, 200)}`,
     `${ko ? '통합 브랜치' : 'integration branch'}: ${run.branch}${run.head ? ` @ ${run.head.slice(0, 10)}` : ''} (${ko ? '기준' : 'from'} ${run.base_branch} @ ${String(run.base_commit).slice(0, 10)}) — ${ko ? '사용자 브랜치는 그대로다' : 'your branch is unchanged'}`,
     `${ko ? '비용' : 'cost'}: $${run.spent_usd != null ? run.spent_usd : '?'} / ${ko ? '상한' : 'budget'} $${run.budget_usd} · ${ko ? '동시' : 'jobs'} ${run.jobs}`,
@@ -281,7 +281,7 @@ function requestStop(root, fid) {
 function accept(o) {
   const root = S.mainRoot(o.root || process.cwd()), run = readRun(root, o.fid);
   if (!run) throw Object.assign(new Error(`unknown factory run: ${o.fid}`), { code: 'UNKNOWN_TASK' });
-  const refused = why => ({ id: run.id, status: run.status, refused: true, reason: why, report: `harness factory ${run.id} — REFUSED: ${why}` });
+  const refused = why => ({ id: run.id, status: run.status, refused: true, reason: why, report: `pilot factory ${run.id} — REFUSED: ${why}` });
   if (run.accepted_at) return refused(`already accepted at ${run.accepted_at} (${String(run.merge_commit || '').slice(0, 10)})`);
   if (!['done', 'partial'].includes(run.status)) return refused(`the run is ${run.status} — nothing to accept`);
   if (!G.branchExists(root, run.branch)) return refused(`the integration branch ${run.branch} is gone`);
@@ -298,7 +298,7 @@ function accept(o) {
   }
   run.accepted_at = S.nowIso(); run.merge_commit = G.headSha(root); run.status = 'accepted'; save(root, run);
   event(root, run.id, { event: 'accepted', merge_commit: run.merge_commit, into: cur });
-  return { id: run.id, status: 'accepted', reason: `merged ${run.branch} into ${cur}`, report: `harness factory ${run.id} — ACCEPTED: merged ${run.branch} into ${cur} @ ${run.merge_commit.slice(0, 10)}` };
+  return { id: run.id, status: 'accepted', reason: `merged ${run.branch} into ${cur}`, report: `pilot factory ${run.id} — ACCEPTED: merged ${run.branch} into ${cur} @ ${run.merge_commit.slice(0, 10)}` };
 }
 
 module.exports = { start, accept, plannerPrompt, parsePlan, validatePlan, overlaps, report, status, requestStop, readRun, listRuns, dirs, FID_RE, DEFAULTS };

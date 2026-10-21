@@ -80,7 +80,7 @@ function authHint(r) {
 }
 
 function format(r) {
-  const L = [`harness push — ${r.refused ? 'REFUSED' : r.ok ? (r.pushed ? 'PUSHED' : r.dryRun ? 'DRY RUN' : 'NOTHING TO PUSH') : 'FAILED'}: ${r.branch} → ${r.remote}`, `why: ${r.reason}`];
+  const L = [`pilot push — ${r.refused ? 'REFUSED' : r.ok ? (r.pushed ? 'PUSHED' : r.dryRun ? 'DRY RUN' : 'NOTHING TO PUSH') : 'FAILED'}: ${r.branch} → ${r.remote}`, `why: ${r.reason}`];
   if (r.commits && r.commits.length) L.push(`commits (${r.ahead}):`, ...r.commits.map(c => `  ${c}`), ...(r.ahead > r.commits.length ? [`  … (+${r.ahead - r.commits.length})`] : []));
   if (r.fetchError) L.push(`note: fetch failed (${r.fetchError}) — the remote state may be stale`);
   const h = authHint(r); if (h) L.push(h);

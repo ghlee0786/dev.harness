@@ -75,7 +75,7 @@ async function stop(o) {
 }
 
 function format(r) {
-  const L = [`harness ${r.task.id} — ${r.stopped ? 'STOPPED' : r.ok ? 'NOT RUNNING' : 'NOT STOPPED'}`, `why: ${r.reason}`];
+  const L = [`pilot ${r.task.id} — ${r.stopped ? 'STOPPED' : r.ok ? 'NOT RUNNING' : 'NOT STOPPED'}`, `why: ${r.reason}`];
   if (r.commit) L.push(`work in progress committed on ${r.task.branch} @ ${r.commit.slice(0, 10)}`);
   if (r.commitError) L.push(`could not commit the worktree: ${r.commitError}`);
   if (r.next) L.push(...r.next);

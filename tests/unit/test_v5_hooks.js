@@ -448,6 +448,18 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
         [`echo x > "${advTmp.replace(/\\/g, '/')}/scratch.txt"`, 'Bash'], ['rm -rf "$PWD/build"', 'Bash'], ['node -e "console.log(1)"', 'Bash'], ['cat a.js > /dev/null', 'Bash']];
       const passedW = mustPassW.map(([c, t]) => [c, !dec(c, t)]);
       R.check('[guard/worker-adv] 작업자 모드: worktree 안 · 임시 폴더 · 이 작업의 compose 는 그대로 통과', passedW.every(x => x[1]), JSON.stringify(passedW.filter(x => !x[1]).map(x => [x[0], String(dec(x[0], 'Bash')).slice(0, 80)])));
+      // [2026-10-21 사용 분석 · 거부 재생] ① 따옴표 안의 > 를 리디렉션으로 오인(grep 검색어) ② 지시문대로 이 작업 접두어로 만든 컨테이너를 지우는 것까지 막음
+      const keepEnv = ['COMPOSE_PROJECT_NAME', 'HARNESS_DATA_NS'].map(k => [k, process.env[k]]);
+      process.env.COMPOSE_PROJECT_NAME = 'harness-t-20261017-000000-abcd'; process.env.HARNESS_DATA_NS = 'h_t_20261017_000000_abcd';
+      try {
+        const passQ = [['grep -n "x" a.js | grep -i "raw\\|string>\\|JToken"', 'Bash'], ['grep -rn "TargetType\\b.*=>\\|\\"사람\\"" --include=*.cs .', 'Bash'], ["grep -E '<[a-z]+>' a.js", 'Bash'],
+          ['Select-String -Path a.js -Pattern "a->b"', 'PowerShell'], ['docker rm -f harness-t-20261017-000000-abcd-pg', 'Bash'], ['docker rm -f "$env:COMPOSE_PROJECT_NAME-pg"', 'PowerShell'],
+          ['docker rm -f -v "$HARNESS_DATA_NS-pg"', 'Bash'], ['docker stop -t 5 ${COMPOSE_PROJECT_NAME}-redis', 'Bash'], ['docker volume rm h_t_20261017_000000_abcd_data', 'Bash']];
+        const blockQ = [[`bash -c "echo x > ${U}/k.txt"`, 'Bash'], [`echo "a">${U}/k.txt`, 'Bash'], [`eval "echo hi > ${U}/k.txt"`, 'Bash'], [`cmd /c "echo x > ${Uw}\\k.txt"`, 'PowerShell'],
+          ['docker rm -f other-users-db', 'Bash'], ['docker rm -f harness-t-20261017-000000-abcd-pg other-users-db', 'Bash'], ['docker container prune -f', 'Bash'], ['docker stop $(docker ps -q)', 'Bash'], ['docker kill sso-server', 'Bash']];
+        const badQ = [...passQ.filter(([c, t]) => dec(c, t)).map(([c]) => `막힘(오탐): ${c}`), ...blockQ.filter(([c, t]) => !dec(c, t)).map(([c]) => `통과(구멍): ${c.replace(base, '<T>')}`)];
+        R.check('[guard/worker-q] 따옴표 안 > · < 는 데이터(grep 검색어) · 이 작업 접두어 컨테이너 정리는 통과 — 중첩 셸의 리디렉션 · 남의 컨테이너 · 전역 정리는 그대로 막힘', !badQ.length, JSON.stringify(badQ));
+      } finally { for (const [k, v] of keepEnv) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
       // [2026-10-19 적대적 재평가 · 현장 66건] 정당한 명령을 막았다 — 같은 명령에서 정한 변수 · $env:TEMP · Git Bash /tmp · worktree 안 하위 저장소 · docker 읽기
       const W2 = wtA.replace(/\\/g, '/');
       fs.mkdirSync(path.join(wtA, 'nested'), { recursive: true }); git(path.join(wtA, 'nested'), 'init', '-q');

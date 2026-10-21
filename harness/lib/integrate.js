@@ -27,7 +27,7 @@ function load(o) {
 }
 function out(task, extra) {
   const r = { ...L.result(task), ...(extra || {}) };
-  r.report = extra && extra.report ? extra.report : `harness ${task.id} — ${r.status}${r.reason ? ': ' + r.reason : ''}`;
+  r.report = extra && extra.report ? extra.report : `pilot ${task.id} — ${r.status}${r.reason ? ': ' + r.reason : ''}`;
   return r;
 }
 // 한국어 작업(task.language === 'Korean')이면 보고를 한국어로 — [2026-10-13 사용자 보고] 결과가 영어로 나왔다.
@@ -46,7 +46,7 @@ const REFUSE_KO = [
   [/^the previous worktree (\S+) is still being removed(.*)$/s, m => `이전 worktree ${m[1]} 가 아직 지워지는 중이다(다른 프로세스가 파일을 잡고 있다) — 1분쯤 뒤 다시 하세요`],
 ];
 const refuseKo = r => { for (const [re, fn] of REFUSE_KO) { const m = re.exec(String(r)); if (m) return fn(m); } return String(r); };
-const refused = (task, reason) => out(task, { refused: true, reason, report: isKo(task) ? `harness ${task.id} — 바뀐 것 없음: ${refuseKo(reason)}` : `harness ${task.id} — nothing changed: ${reason}` });
+const refused = (task, reason) => out(task, { refused: true, reason, report: isKo(task) ? `pilot ${task.id} — 바뀐 것 없음: ${refuseKo(reason)}` : `pilot ${task.id} — nothing changed: ${reason}` });
 
 // 메인 체크아웃(대상 브랜치가 체크아웃된 곳)의 미커밋 변경 중 files 와 겹치는 것.
 function dirtyOverlap(cwd, files) {
@@ -257,7 +257,7 @@ async function accept(o) {
       const m = G.git(P.wt, [...G.identityArgs(P.wt), 'merge', '--no-ff', '--no-edit', '--no-verify', '-m', `harness(${task.id}): bring ${target} up to date`, target], { allowFail: true, retryLock: true });
       if (!m.ok) {
         if (!G.mergeInProgress(P.wt)) { S.writeTask(root, task); return refused(task, `could not bring ${target} into ${task.branch}: ${m.err.trim().slice(0, 300)}`); }
-        log(`[harness] ${task.id} — conflicts with ${target}; asking the session to resolve them`);
+        log(`[pilot] ${task.id} — conflicts with ${target}; asking the session to resolve them`);
         const res = await resolveConflicts(root, task, P, target, o);
         if (!res.ok) { S.writeTask(root, task); return refused(task, res.why); }
         rounds += res.rounds;
@@ -357,14 +357,14 @@ async function accept(o) {
     }
     S.writeTask(root, task);
     if (isKo(task)) {
-      const headKo = was.status === 'done' ? `harness ${task.id} — 받아들임` : `harness ${task.id} — 받아들임(강제) — 작업 상태는 ${was.status}: ${was.reason || '(이유 기록 없음)'}`;
+      const headKo = was.status === 'done' ? `pilot ${task.id} — 받아들임` : `pilot ${task.id} — 받아들임(강제) — 작업 상태는 ${was.status}: ${was.reason || '(이유 기록 없음)'}`;
       return out(task, { report: [headKo, `${task.branch} 를 ${target} 에 ${merge.slice(0, 10)} 로 병합했다${tagErr ? '' : `(태그 ${tag})`}${rounds ? ` — 충돌 해결 ${rounds}회 뒤` : ''}.`,
         ...(tagErr ? [`경고: 태그 ${tag} 를 만들지 못했다: ${tagErr} — 병합은 작업 기록(merge_commit ${merge.slice(0, 10)})에 있어 cancel 은 그대로 된다`] : []),
         ...(task.worktree_kept ? [`작업 폴더(worktree) 남김: ${P.wt} (${task.worktree_kept})`] : []),
         ...docLines,
         `계획 보관: ${P.archiveDir}`, `되돌리기: node harness/cli.js cancel ${task.id}   (revert 커밋을 만든다 · reset 은 쓰지 않는다)`].join('\n') });
     }
-    const head = was.status === 'done' ? `harness ${task.id} — ACCEPTED` : `harness ${task.id} — ACCEPTED (forced) — the task was ${was.status}: ${was.reason || '(no reason recorded)'}`;
+    const head = was.status === 'done' ? `pilot ${task.id} — ACCEPTED` : `pilot ${task.id} — ACCEPTED (forced) — the task was ${was.status}: ${was.reason || '(no reason recorded)'}`;
     return out(task, { report: [head, `merged ${task.branch} into ${target} as ${merge.slice(0, 10)}${tagErr ? '' : ` (tag ${tag})`}${rounds ? ` after ${rounds} conflict-resolution round(s)` : ''}.`,
       ...(tagErr ? [`warning: could not create tag ${tag}: ${tagErr} — the merge is recorded in the task (merge_commit ${merge.slice(0, 10)}); cancel still works`] : []),
       ...(task.worktree_kept ? [`worktree kept: ${P.wt} (${task.worktree_kept})`] : []),
@@ -441,8 +441,8 @@ async function cancel(o) {
       Object.assign(task, { status: 'cancelled', reason: `merge ${task.merge_commit.slice(0, 10)} reverted on ${target} by ${r.sha.slice(0, 10)}${r.checksSkipped ? ' (checks skipped)' : ''}`, revert_commit: r.sha, cancelled_from: 'accepted', cancelled_at: S.nowIso() });
       S.writeTask(root, task);
       S.log(root, task.id, { event: 'cancelled', after_merge: true, revert_commit: r.sha, checks_skipped: !!r.checksSkipped });
-      if (isKo(task)) return out(task, { report: [`harness ${task.id} — 취소(병합 뒤)`, `${target} 에서 ${task.merge_commit.slice(0, 10)} 를 ${r.sha.slice(0, 10)} 로 되돌렸다(보통 커밋 — 기록은 남는다).`, ...(r.checksSkipped ? ['검사를 건너뛰었다(--skip-checks) — 직접 확인하세요'] : []), `되살리기: node harness/cli.js restore ${task.id}`].join('\n') });
-      return out(task, { report: [`harness ${task.id} — CANCELLED (after merge)`, `reverted ${task.merge_commit.slice(0, 10)} on ${target} with ${r.sha.slice(0, 10)} (a normal commit; history is kept).`, ...skippedLine(r, 'revert'), `undo: node harness/cli.js restore ${task.id}`].join('\n') });
+      if (isKo(task)) return out(task, { report: [`pilot ${task.id} — 취소(병합 뒤)`, `${target} 에서 ${task.merge_commit.slice(0, 10)} 를 ${r.sha.slice(0, 10)} 로 되돌렸다(보통 커밋 — 기록은 남는다).`, ...(r.checksSkipped ? ['검사를 건너뛰었다(--skip-checks) — 직접 확인하세요'] : []), `되살리기: node harness/cli.js restore ${task.id}`].join('\n') });
+      return out(task, { report: [`pilot ${task.id} — CANCELLED (after merge)`, `reverted ${task.merge_commit.slice(0, 10)} on ${target} with ${r.sha.slice(0, 10)} (a normal commit; history is kept).`, ...skippedLine(r, 'revert'), `undo: node harness/cli.js restore ${task.id}`].join('\n') });
     }
     // 병합 전: 커밋되지 않은 것은 먼저 커밋한다 — 커밋되지 않은 worktree 는 지우지 않는다.
     // [버그 2026-10-01] 폴더가 있다는 것만으로 커밋하지 않는다 — 등록이 사라진 빈 폴더에서는 git 이 메인 저장소를 본다.
@@ -474,8 +474,8 @@ async function cancel(o) {
     releaseResources(root, task);
     S.writeTask(root, task);
     S.log(root, task.id, { event: 'cancelled', after_merge: false, tag: kept ? tag : null });
-    if (isKo(task)) return out(task, { report: [`harness ${task.id} — 취소`, `브랜치 ${task.branch} 와 worktree 를 버렸다${kept ? ` — 커밋은 태그 ${tag} 에 남는다` : ''}.`, `되살리기: node harness/cli.js restore ${task.id}`].join('\n') });
-    return out(task, { report: [`harness ${task.id} — CANCELLED`, `branch ${task.branch} and its worktree were discarded${kept ? `; the commits are kept at tag ${tag}` : ''}.`, `undo: node harness/cli.js restore ${task.id}`].join('\n') });
+    if (isKo(task)) return out(task, { report: [`pilot ${task.id} — 취소`, `브랜치 ${task.branch} 와 worktree 를 버렸다${kept ? ` — 커밋은 태그 ${tag} 에 남는다` : ''}.`, `되살리기: node harness/cli.js restore ${task.id}`].join('\n') });
+    return out(task, { report: [`pilot ${task.id} — CANCELLED`, `branch ${task.branch} and its worktree were discarded${kept ? `; the commits are kept at tag ${tag}` : ''}.`, `undo: node harness/cli.js restore ${task.id}`].join('\n') });
   });
 }
 
@@ -495,8 +495,8 @@ async function restore(o) {
         reverts: [...(task.reverts || []), task.revert_commit], revert_commit: null, restored_at: S.nowIso() });
       S.writeTask(root, task);
       S.log(root, task.id, { event: 'restored', restore_commit: r.sha, checks_skipped: !!r.checksSkipped });
-      if (isKo(task)) return out(task, { status: 'restored', task_status: task.status, report: [`harness ${task.id} — 되살림`, `${target} 에 ${r.sha.slice(0, 10)} 로 병합을 다시 적용했다.`, ...(r.checksSkipped ? ['검사를 건너뛰었다(--skip-checks) — 직접 확인하세요'] : [])].join('\n') });
-      return out(task, { status: 'restored', task_status: task.status, report: [`harness ${task.id} — RESTORED`, `re-applied the merge on ${target} with ${r.sha.slice(0, 10)}.`, ...skippedLine(r, 'restore')].join('\n') });
+      if (isKo(task)) return out(task, { status: 'restored', task_status: task.status, report: [`pilot ${task.id} — 되살림`, `${target} 에 ${r.sha.slice(0, 10)} 로 병합을 다시 적용했다.`, ...(r.checksSkipped ? ['검사를 건너뛰었다(--skip-checks) — 직접 확인하세요'] : [])].join('\n') });
+      return out(task, { status: 'restored', task_status: task.status, report: [`pilot ${task.id} — RESTORED`, `re-applied the merge on ${target} with ${r.sha.slice(0, 10)}.`, ...skippedLine(r, 'restore')].join('\n') });
     }
     const tag = `harness/cancelled/${task.id}`;
     if (!G.tagExists(root, tag)) return refused(task, `nothing to restore (no revert commit and no tag ${tag})`);
@@ -507,8 +507,8 @@ async function restore(o) {
     Object.assign(task, { status: back, reason: task.cancelled_from_reason ? `${task.cancelled_from_reason} (restored from tag ${tag})` : `restored from tag ${tag}`, restored_at: S.nowIso() });
     S.writeTask(root, task);
     S.log(root, task.id, { event: 'restored', from_tag: tag });
-    if (isKo(task)) return out(task, { status: 'restored', task_status: task.status, report: `harness ${task.id} — 되살림\n브랜치 ${task.branch} 가 돌아왔다(상태 ${task.status}) — 전처럼 accept 하거나 cancel 하세요.` });
-    return out(task, { status: 'restored', task_status: task.status, report: `harness ${task.id} — RESTORED\nbranch ${task.branch} is back (status ${task.status}); accept or cancel it as before.` });
+    if (isKo(task)) return out(task, { status: 'restored', task_status: task.status, report: `pilot ${task.id} — 되살림\n브랜치 ${task.branch} 가 돌아왔다(상태 ${task.status}) — 전처럼 accept 하거나 cancel 하세요.` });
+    return out(task, { status: 'restored', task_status: task.status, report: `pilot ${task.id} — RESTORED\nbranch ${task.branch} is back (status ${task.status}); accept or cancel it as before.` });
   });
 }
 

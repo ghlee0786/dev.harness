@@ -22,10 +22,16 @@ const C = require('./_common');
 //   mode: 'bash'(\ 이스케이프 · ` 치환) | 'ps'(` 이스케이프 · '' 이스케이프 · @' '@ here-string).
 const SUB = '\u0001';
 
+// [2026-10-21 사용 분석 · 재생 검증] 따옴표 안의 > · < 는 데이터다 — `grep "string>\|JToken"` 이 `x>파일` 리디렉션으로 오인돼 막혔다.
+//   lexer 는 따옴표 안의 > · < 를 표식으로 바꾸고, 다시 명령으로 읽을 때(lex 입구 — bash -c · cmd /c · eval · 별칭이 모두 여기를 지난다)만 되돌린다.
+const QGT = '\u0002', QLT = '\u0003';
+const quotedCh = c => (c === '>' ? QGT : c === '<' ? QLT : c);
+const unquote = x => String(x).replace(/\u0002/g, '>').replace(/\u0003/g, '<');
+
 function lex(src, mode) {
   const out = [];
   const st = { i: 0 };
-  lexInto(String(src || ''), mode, st, out, false);
+  lexInto(unquote(String(src || '')), mode, st, out, false);
   return out;
 }
 
@@ -115,7 +121,7 @@ function lexInto(s, mode, st, out, nested) {
           if (mode === 'ps' && s[st.i + 1] === '\'') { w += '\''; st.i += 2; continue; }
           st.i++; break;
         }
-        w += s[st.i++];
+        w += quotedCh(s[st.i++]);
       }
       continue;
     }
@@ -137,7 +143,7 @@ function lexInto(s, mode, st, out, nested) {
         if (mode === 'ps' && c === '`' && st.i + 1 < s.length) { w += s[st.i + 1]; st.i += 2; continue; }
         if (c === '$' && s[st.i + 1] === '(') { st.i += 2; sub(); continue; }
         if (mode === 'bash' && c === '`') { st.i++; backtickSub(); continue; }
-        w += c; st.i++;
+        w += quotedCh(c); st.i++;
       }
       continue;
     }
@@ -573,7 +579,9 @@ function workerTarget(t0, mode, ctx, allowTmp) {
   if (C.samePath(norm, root) || isAncestor(root, norm)) return ownsCheck(root, norm, t, ctx);
   const inMain = ctx.mainRoot && (C.samePath(norm, C.real(ctx.mainRoot)) || isAncestor(C.real(ctx.mainRoot), norm));
   if (allowTmp && !inMain && tmpRoots().some(r => C.samePath(norm, r) || isAncestor(r, norm))) return null;
-  return `${REASONS.outsideWorker} (대상: ${t})`;
+  // [2026-10-21 사용 분석] 작업자가 시스템 임시 폴더 아무 곳(…\Temp\x.py)에 쓰다 막혀 같은 시도를 되풀이했다 — 쓸 수 있는 임시 폴더를 알려 준다
+  const tmpHint = allowTmp && process.env.TEMP ? ` 임시 파일은 이 작업의 임시 폴더에: ${process.env.TEMP}` : '';
+  return `${REASONS.outsideWorker} (대상: ${t})${tmpHint}`;
 }
 // 쓰기 소유권(PRD R3) — 작업에 소유 경로(HARNESS_OWNS: glob 의 JSON 배열)가 있으면 worktree 안이라도 그 밖은 쓰지도 지우지도 못한다.
 //   [2026-10-20] 여러 작업자가 한 저장소를 동시에 고칠 때 엉키지 않게 하는 첫 벽. 하네스 기록(.harness/<id>/)은 언제나 된다.
@@ -674,7 +682,16 @@ function checkWorker(p, args, words0, mode, ctx) {
     if (compose && pi >= 0 && !(/^\$\{?COMPOSE_PROJECT_NAME\}?$|^\$env:COMPOSE_PROJECT_NAME$/i.test(pv) || (process.env.COMPOSE_PROJECT_NAME && pv === process.env.COMPOSE_PROJECT_NAME))) return REASONS.dockerProject;
     // 지우거나 멈추는 것만 — docker images · network ls · ps 같은 읽기는 그대로(2026-10-19 현장 오탐)
     const k = args.indexOf(sub), act = (args.slice(k + 1).find(a => !a.startsWith('-')) || '').toLowerCase();
-    if (!compose && (/^(rm|rmi|stop|kill|restart|pause|prune)$/i.test(sub) || (/^(container|volume|network|image|system|builder)$/i.test(sub) && /^(rm|remove|prune|stop|kill|restart|pause|delete|disconnect)$/.test(act)))) return REASONS.dockerGlobal;
+    if (!compose && (/^(rm|rmi|stop|kill|restart|pause|prune)$/i.test(sub) || (/^(container|volume|network|image|system|builder)$/i.test(sub) && /^(rm|remove|prune|stop|kill|restart|pause|delete|disconnect)$/.test(act)))) {
+      // [2026-10-21 사용 분석 · 재생 검증] 지시문은 "docker run 으로 띄운 것은 $COMPOSE_PROJECT_NAME 접두어로 이름 짓고 끝나면 지워라" 인데 여기서 막혀 모순이었다.
+      //   대상 이름이 모두 이 작업의 접두어($COMPOSE_PROJECT_NAME · $HARNESS_DATA_NS — 값이든 변수 표기든)로 시작하면 통과. prune · system 은 언제나 전역이라 막는다.
+      if (/^(prune|system|builder)$/i.test(sub) || act === 'prune') return REASONS.dockerGlobal;
+      const rest = args.slice(/^(container|volume|network|image)$/i.test(sub) ? args.indexOf(act, k + 1) + 1 : k + 1);
+      const names = []; for (let i = 0; i < rest.length; i++) { const a = rest[i]; if (/^(-t|--time|-s|--signal)$/i.test(a)) { i++; continue; } if (a.startsWith('-')) continue; names.push(String(a).replace(/^["']|["']$/g, '')); }
+      const prefixes = ['COMPOSE_PROJECT_NAME', 'HARNESS_DATA_NS'].flatMap(v => [`$${v}`, `\${${v}}`, `$env:${v}`, ...(process.env[v] ? [process.env[v]] : [])]);
+      const ours = n => prefixes.some(pf => n.toLowerCase().startsWith(pf.toLowerCase()));
+      if (!names.length || !names.every(ours)) return REASONS.dockerGlobal;
+    }
   }
   return null;
 }
@@ -840,7 +857,7 @@ function main() {
     const reason = decide(input, C.detectRuntime(input), { worker: process.argv.includes('--worker') });   // 작업자 모드 — policy 의 open 설정이 붙인다
     if (!reason) return;
     process.stdout.write(JSON.stringify({
-      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[harness guard] ${reason}` },
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[pilot guard] ${reason}` },
     }) + '\n');
   } catch (e) {
     C.logError('guard', e, input && input.cwd);

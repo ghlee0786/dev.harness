@@ -220,7 +220,7 @@ function saveManifest(ctx, remove) {
 // cli.js 는 r.report 를 그대로 출력하고 r.ok === false 면 1 로 끝난다.
 function summary(ctx, verb) {
   const changed = [...new Set(ctx.changed)];
-  const L = [`harness ${verb}${ctx.opts.dryRun ? ' (dry run — 아무것도 쓰지 않음)' : ''}: ${ctx.root}`];
+  const L = [`pilot ${verb}${ctx.opts.dryRun ? ' (dry run — 아무것도 쓰지 않음)' : ''}: ${ctx.root}`];
   if (!changed.length) L.push('  바뀐 것 없음');
   // harness/ 사본은 파일이 많다 — 한 줄로 묶는다.
   const copies = changed.filter(c => c.startsWith('harness/'));
@@ -449,7 +449,7 @@ function runningTasks(root) {
 }
 
 function refuse(ctx, why) {
-  const L = [`harness install 중단: ${ctx.root}`, `  기존 harness/ 를 덮어쓰지 않았다 — ${why}.`,
+  const L = [`pilot install 중단: ${ctx.root}`, `  기존 harness/ 를 덮어쓰지 않았다 — ${why}.`,
     '  아무것도 바꾸지 않았다. 그 폴더를 옮기거나, 덮어써도 되면 `node harness/cli.js install --force` 로 다시 실행하세요.'];
   return { ok: false, target: ctx.root, changed: [], skipped: [{ path: 'harness/', reason: why }], notes: [], dryRun: !!ctx.opts.dryRun, report: L.join('\n') };
 }

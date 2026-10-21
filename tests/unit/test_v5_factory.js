@@ -143,7 +143,7 @@ if(/You are the PLANNER/.test(o.prompt))return ok({final_text:JSON.stringify({co
 fs.mkdirSync(p.join(o.cwd,'src','z'),{recursive:true});fs.writeFileSync(p.join(o.cwd,'src','z','z.js'),'7\\n');return ok();};\n`);
     const cli = spawnSync(process.execPath, [path.join(__dirname, '..', '..', 'harness', 'cli.js'), 'factory', '모듈 z 를 만들어라', '--root', r8], { encoding: 'utf8', windowsHide: true, timeout: 240000, env: { ...process.env, HARNESS_RUNNER_MODULE: runner, HARNESS_DOCKER_CLEANUP: 'off' } });
     const runs8 = F.listRuns(r8);
-    R.check('[FA-08] CLI factory: 분리된 프로세스에서 끝까지(done) · 부른 쪽이 보고를 낸다 · 진행 줄 · 결과 줄', cli.status === 0 && runs8.length === 1 && runs8[0].status === 'done' && runs8[0].owner.pid !== process.pid && /harness factory f-.* — DONE/.test(cli.stdout) && /분리된 프로세스/.test(cli.stderr), `${cli.status}\n${cli.stdout.slice(-800)}\n${cli.stderr.slice(-800)}`);
+    R.check('[FA-08] CLI factory: 분리된 프로세스에서 끝까지(done) · 부른 쪽이 보고를 낸다 · 진행 줄 · 결과 줄', cli.status === 0 && runs8.length === 1 && runs8[0].status === 'done' && runs8[0].owner.pid !== process.pid && /pilot factory f-.* — DONE/.test(cli.stdout) && /분리된 프로세스/.test(cli.stderr), `${cli.status}\n${cli.stdout.slice(-800)}\n${cli.stderr.slice(-800)}`);
     const st8 = spawnSync(process.execPath, [path.join(__dirname, '..', '..', 'harness', 'cli.js'), 'factory', 'status', '--root', r8], { encoding: 'utf8', windowsHide: true });
     R.check('[FA-08] CLI factory status · 잘못된 id 는 사용법 오류(2)', st8.status === 0 && /DONE/.test(st8.stdout) && spawnSync(process.execPath, [path.join(__dirname, '..', '..', 'harness', 'cli.js'), 'factory', 'wait', 'nope', '--root', r8], { encoding: 'utf8', windowsHide: true }).status === 2, st8.stdout);
 
