@@ -8,7 +8,7 @@ const AUTONOMY = [
   // [2026-10-16 자동 보고 00b4667cbf35] "이번 작업에서 만들지 않은 파일은 지우지 말라" 가 앞 작업 파일의 이름 바꾸기를 막아 어색한 결과를 남겼다.
   //   worktree 안의 삭제 · 이름 바꾸기는 하네스가 턴마다 커밋하므로 되돌릴 수 있다 — 되돌릴 수 없는 것은 worktree 밖(guard 가 막는다).
   // [2026-10-17 자동 보고 caed67b9a2f1] 작업자가 worktree 의 compose 로 사용자의 실행 중 컨테이너를 다시 만들어 서비스가 멈췄다.
-  'Do not stop, restart or recreate the running services, containers or processes of the main checkout — they are in use. If you need to run services, start your own (the harness gives this worktree its own COMPOSE_PROJECT_NAME; name containers you start with `docker run` with that prefix, e.g. `--name $COMPOSE_PROJECT_NAME-pg`) and remove them when you are done — the harness also removes anything left with that name when the task ends.',
+  'Do not stop, restart or recreate the running services, containers or processes of the main checkout — they are in use. If you need to run services, start your own (the harness gives this worktree its own COMPOSE_PROJECT_NAME; name containers you start with `docker run` with that prefix, e.g. `--name $COMPOSE_PROJECT_NAME-pg`) and remove them when you are done — the harness also removes anything left with that name when the task ends. Never remove Docker images, containers or volumes this task did not create — not with docker commands and not through scripts or tools that clean up by name (the harness reports any pre-existing image that disappears).',
   'Irreversible actions are forbidden: no git push, no merging or resetting branches, and no deleting anything outside this worktree. Deleting or renaming files inside this worktree is fine when the goal needs it (including files earlier tasks created) — the harness commits after every turn, so it can be undone.',
   // [2026-10-20 PRD R1] 시험 뒤 쓰레기 — 하네스가 회수할 수 있는 곳에만 만든다
   'Leave no garbage: put scratch files in $TEMP (TEMP · TMP · TMPDIR — this task\'s own folder, deleted by the harness), and name or prefix any test data you create outside the worktree (databases, schemas, queues, caches, buckets) with $HARNESS_DATA_NS so it can be cleaned up.',
@@ -245,6 +245,15 @@ function conflictMessage(t, target, files) {
 }
 
 // 마지막 말이 질문·허락 요청인가.
+// [2026-10-21 자동 이슈 #28] 작업자가 자기 시험 · 빌드 결과를 기다리는 중이라며 턴을 끝냈는데 done 이 됐다 — 마지막 말이 "기다리는 중" 이면 한 번 더 준다
+function isPending(text) {
+  const s = String(text || '').trim().slice(-500);
+  if (!s) return false;
+  return /(기다리는 중|기다리고 있|결과를 기다|끝나면 (알려|보고|확인)|완료되면 (알려|보고|확인)|아직 (실행|진행|돌고) 중|백그라운드(에서|로) (실행|돌)|\bstill running\b|\bwaiting for\b|\bonce (it|they|the (tests?|build|run)) (finish|complete)|\bwill (report|update|check) (back|once|when)|\brunning in the background\b)/i.test(s);
+}
+function pendingMessage(t) {
+  return `Your last message says something is still running or that you are waiting for a result. Nothing keeps running after your turn ends — run it now in the foreground, wait for it to finish, read the result, then finish with that result (update .harness/${t.id}/PLAN.md).`;
+}
 function isQuestion(text) {
   const s = String(text || '').trim();
   if (!s) return false;
@@ -252,4 +261,4 @@ function isQuestion(text) {
   return /할까요|하시겠|원하시면|괜찮을까요|진행할까|\bshould I\b|\bwould you like\b|\bshall I\b|\bdo you want\b|\blet me know if\b/i.test(s.slice(-400));
 }
 
-module.exports = { qualityMessage, dupMessage, notesBlock, notesTurnMessage, lintLines, lintFailMessage, AUTONOMY, systemAppend, languageLine, attachmentLines, taskPrompt, freshResumeMessage, failMessage, nudgeMessage, noChangeMessage, errorMessage, resumeMessage, unblockMessage, conflictMessage, isQuestion, remainingLine, money };
+module.exports = { isPending, pendingMessage, qualityMessage, dupMessage, notesBlock, notesTurnMessage, lintLines, lintFailMessage, AUTONOMY, systemAppend, languageLine, attachmentLines, taskPrompt, freshResumeMessage, failMessage, nudgeMessage, noChangeMessage, errorMessage, resumeMessage, unblockMessage, conflictMessage, isQuestion, remainingLine, money };

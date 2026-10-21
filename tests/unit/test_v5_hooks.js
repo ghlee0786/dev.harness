@@ -236,6 +236,23 @@ const claudeWrite = (repo, sid, file, tool) => hook('track', { hook_event_name: 
     const saLog = git(st, 'log', '-1', '--name-only', '--format=%s');
     R.check('[stop] 이어 간 턴 뒤에도 남았으면 통과시키고 훅이 직접 커밋한다', isAllow(b2) && sa && sa.last_commit && sa.last_commit.by === 'stop-fallback' && /^wip\(session /.test(saLog) && /a\.js/.test(saLog), JSON.stringify(sa) + ' | ' + saLog);
     R.check('[stop] 대신 커밋할 때도 다른 세션의 b.js 는 넣지 않는다', !/b\.js/.test(saLog) && /b\.js/.test(git(st, 'status', '--porcelain')), saLog);
+    // [자동 이슈 #35] "바로 이어서 진행하겠다" 고 해 놓고 아무것도 띄우지 않고 끝나면 한 번 되돌려 보낸다
+    {
+      const SP = require(path.join(HOOKS, 'stop.js'));
+      const tr = (name, rows) => { const f = path.join(base, `tr-${name}.jsonl`); fs.writeFileSync(f, rows.map(r => JSON.stringify(r)).join('\n') + '\n'); return f; };
+      const u = text => ({ type: 'user', message: { role: 'user', content: text } });
+      const a = (text, tools) => ({ type: 'assistant', message: { role: 'assistant', content: [...(tools || []).map(t => ({ type: 'tool_use', name: t.name, input: t.input || {} })), ...(text ? [{ type: 'text', text }] : [])] } });
+      const say = '설치까지 끝났습니다. 다음 단계(병합)는 바로 이어서 진행하겠습니다.';
+      const c1 = SP.promiseWithoutAction({ transcript_path: tr('p1', [u('계속해'), a(say)]) });
+      const c2 = SP.promiseWithoutAction({ transcript_path: tr('p2', [u('계속해'), a(null, [{ name: 'Bash', input: { command: 'npm run build', run_in_background: true } }]), a(say)]) });
+      const c3 = SP.promiseWithoutAction({ transcript_path: tr('p3', [u('계속해'), a('다음 단계를 바로 이어서 진행할까요?')]) });
+      const c4 = SP.promiseWithoutAction({ transcript_path: tr('p4', [u('계속해'), a(say)]), stop_hook_active: true });
+      const c5 = SP.promiseWithoutAction({ transcript_path: tr('p5', [u('계속해'), a('병합까지 모두 끝냈습니다. 테스트 120개 통과.')]) });
+      const c6 = SP.promiseWithoutAction({ transcript_path: tr('p6', [u('계속해'), a(null, [{ name: 'ScheduleWakeup', input: { delaySeconds: 1200 } }]), a(say)]) });
+      const c7 = SP.promiseWithoutAction({ transcript_path: tr('p7', [u('이전'), a(null, [{ name: 'Monitor' }]), u('계속해'), a(say)]) });   // 앞 차례의 감시는 이번 차례 것이 아니다
+      R.check('[stop/#35] 약속만 하고 아무것도 안 띄우면 되돌려 보냄 · 백그라운드 · 예약 깨우기가 있거나 · 질문 · 이미 되돌린 뒤 · 끝낸 보고는 그냥 둔다',
+        !!c1 && /이어서 진행하겠다/.test(c1) && !c2 && !c3 && !c4 && !c5 && !c6 && !!c7, JSON.stringify([!!c1, !!c2, !!c3, !!c4, !!c5, !!c6, !!c7]));
+    }
     write(path.join(st, 'a.js'), 'AA\n');
     R.check('[stop] 새 턴(stop_hook_active false)이면 다시 한 번 막는다', (stop('SA', false).json || {}).decision === 'block');
     git(st, 'add', 'a.js'); git(st, '-c', 'user.name=u', '-c', 'user.email=u@x', 'commit', '-q', '-m', 'a', '--', 'a.js');

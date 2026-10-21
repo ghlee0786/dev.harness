@@ -25,8 +25,12 @@ function envFor(cwd) {
   if (!m) return {};
   const id = m[2], dir = tmpDirFor(m[1], id);
   try { fs.mkdirSync(dir, { recursive: true }); } catch { /* 못 만들면 TEMP 를 바꾸지 않는다 */ return { COMPOSE_PROJECT_NAME: composeProject(id), HARNESS_TASK_ID: id, HARNESS_DATA_NS: dataNs(id) }; }
-  return { COMPOSE_PROJECT_NAME: composeProject(id), TEMP: dir, TMP: dir, TMPDIR: dir, HARNESS_TMP_BASE: baseTmp(), HARNESS_TASK_ID: id, HARNESS_DATA_NS: dataNs(id) };
+  return { COMPOSE_PROJECT_NAME: composeProject(id), TEMP: dir, TMP: dir, TMPDIR: dir, HARNESS_TMP_BASE: baseTmp(), HARNESS_TASK_ID: id, HARNESS_DATA_NS: dataNs(id), ...BUILD_NO_SERVERS };
 }
+// [2026-10-21 자동 이슈 #25 · #26] 작업자 · 검사의 dotnet test/build 가 MSBuild 작업 노드(/nodemode:1)를 수백 개씩 띄우고, 부모가 끝나면
+//   고아로 남아 1,000개 · 수십 GB 까지 쌓였다(작업 끝 점검은 부모를 잃은 노드를 작업 소속으로 알아보지 못한다). 처음부터 띄우지 않게 한다:
+//   노드 재사용 끔 · MSBuild 서버 끔 · Roslyn 컴파일러 서버(VBCSCompiler) 끔. 빌드는 조금 느려지지만 남는 프로세스가 없다.
+const BUILD_NO_SERVERS = { MSBUILDDISABLENODEREUSE: '1', DOTNET_CLI_USE_MSBUILD_SERVER: '0', UseSharedCompilation: 'false' };
 
 // ── docker(compose) ─────────────────────────────────────────────────────────
 const defaultRun = (cmd, args, timeoutMs) => {
@@ -179,8 +183,26 @@ function killStrays(id, o) {
 
 // 작업이 끝날 때(done · blocked · error · interrupted): 돌던 컨테이너 · 네트워크를 내리고 임시 폴더를 지운다(worktree 도 이때 지워진다).
 //   볼륨 · 이미지 · 프로젝트 정리 명령은 accept · cancel · gc 때 — 끝난 작업을 확인하거나 이어 갈 수 있게.
+// [2026-10-21 자동 이슈 #34] 작업자가 시뮬레이션 도구 자신의 정리 경로(이름으로 지우기)를 거쳐 메인 체크아웃의 이미지를 지웠다 —
+//   guard 는 명령 문자열만 보므로 도구 안쪽의 삭제는 막지 못한다. 작업 시작 때 이미지 목록(저장소:태그 · id)을 찍어 두고, 끝날 때
+//   원래 있던 것이 사라졌으면 기록 · 보고한다(되살리지는 못한다 — 다시 빌드할 것을 알린다).
+function imageList(run) {
+  run = run || defaultRun;
+  if (!dockerAvailable(run)) return null;
+  const r = run('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}@{{.ID}}'], 30000);
+  return r.code === 0 ? ids(r.out).filter(x => !/^<none>:<none>@/.test(x)) : null;
+}
+function snapshotImages(task, o) { try { const l = imageList(o && o.run); if (l) task.images_before = l; } catch { /* docker 를 못 보면 비교하지 않는다 */ } }
+function removedImages(task, o) {
+  if (!Array.isArray(task.images_before)) return [];
+  const now = imageList(o && o.run); if (!now) return [];
+  const have = new Set(now);
+  return task.images_before.filter(x => !have.has(x));
+}
 function onTaskEnd(root, task, o) {
-  const p = killStrays(task.id, { since: Date.parse(task.created_at) || null, ...(o || {}) });   // 먼저 — 남은 프로세스가 임시 폴더 · 컨테이너를 붙들고 있으면 지워지지 않는다
+  const gone = removedImages(task, o);
+  if (gone.length) task.images_removed = gone;
+  const p = killStrays(task.id, { since: Date.parse(task.created_at) || null, ...(o || {}) });   // 먼저 — 남은 프로세스가 임시 폴더 · 컨테이너를 붙들고 있으면 지워지지않는다
   const d = teardownCompose(task.id, 'runtime', o && o.run);
   const t = removeTmp(root, task.id);
   return record(task, { at: 'end', procs: p, docker: d, tmp: t, residue: [...p.residue, ...d.residue, ...t.residue] });
@@ -199,4 +221,4 @@ function record(task, r) {
   return r;
 }
 
-module.exports = { envFor, tmpDirFor, dataNs, composeProject, repoKey, teardownCompose, killStrays, reapDescendants, listProcesses: defaultProcs, killProcess: defaultKill, runCleanupCommand, removeTmp, onTaskEnd, release, WT_RE };
+module.exports = { snapshotImages, removedImages, envFor, tmpDirFor, dataNs, composeProject, repoKey, teardownCompose, killStrays, reapDescendants, listProcesses: defaultProcs, killProcess: defaultKill, runCleanupCommand, removeTmp, onTaskEnd, release, WT_RE };

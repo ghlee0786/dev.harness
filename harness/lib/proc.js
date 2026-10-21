@@ -90,7 +90,11 @@ function noPushEnv(extra, cwd) {
   let n = countKey ? parseInt(merged[countKey], 10) : 0;
   if (!(n >= 0)) n = 0;
   const common = commonDirOf(cwd), hooks = common && refHookDir(common);
-  const pairs = [['push.default', 'nothing'], ['remote.pushDefault', ''], [`url.${PUSH_DISABLED}.pushInsteadOf`, ''],
+  // [2026-10-21 자동 이슈 #21] 빈 값(remote.pushDefault= · pushInsteadOf=)은 Windows 에서 환경을 지웠다 되돌리는 시험 픽스처가
+  //   빈 값 변수를 없애 GIT_CONFIG_COUNT 와 어긋나게 만들어 자식 git 이 128 로 실패했다 — 빈 값을 쓰지 않는다:
+  //   pushDefault 는 없는 원격 이름, "모든 URL" 은 URL 이 시작할 수 있는 접두어를 모두 나열한다(스킴 · git@ · 절대/상대 경로 · UNC · 드라이브 문자).
+  const PUSH_PREFIXES = ['https://', 'http://', 'ssh://', 'git://', 'file://', 'git@', '/', './', '../', '\\\\', ...[...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].flatMap(d => [`${d}:`, `${d.toLowerCase()}:`])];
+  const pairs = [['push.default', 'nothing'], ['remote.pushDefault', 'harness-push-disabled'], ...PUSH_PREFIXES.map(p => [`url.${PUSH_DISABLED}.pushInsteadOf`, p]),
     ...[...new Set(pushUrls(cwd))].map(u => [`url.${PUSH_DISABLED}.insteadOf`, u]),
     ...(hooks ? [['core.hooksPath', hooks.replace(/\\/g, '/')]] : [])];
   const out = { ...isolationEnv(cwd), ...(extra || {}) };

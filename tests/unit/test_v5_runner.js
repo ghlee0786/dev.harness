@@ -286,7 +286,9 @@ fs.writeFileSync(process.env.DUMP,JSON.stringify(e));process.stdin.resume();proc
     const cfgPairs = e => { const out = []; for (let i = 0; i < Number(e.GIT_CONFIG_COUNT || 0); i++) out.push(`${e['GIT_CONFIG_KEY_' + i]}=${e['GIT_CONFIG_VALUE_' + i]}`); return out; };
     const ce1 = await envOf('claude'), cx1 = await envOf('codex');
     R.check('[RN-12] (M8) Claude·Codex 워커 환경에 push.default=nothing · 모든 URL 의 pushInsteadOf 를 막는 설정',
-      [ce1, cx1].every(e => cfgPairs(e).includes('push.default=nothing') && cfgPairs(e).some(p => /^url\..+\.pushinsteadof=$/i.test(p))), JSON.stringify([cfgPairs(ce1), cfgPairs(cx1)]));
+      [ce1, cx1].every(e => cfgPairs(e).includes('push.default=nothing') && cfgPairs(e).some(p => /^url\..+\.pushinsteadof=https:\/\/$/i.test(p))), JSON.stringify([cfgPairs(ce1), cfgPairs(cx1)]));
+    // [자동 이슈 #21] 빈 값 GIT_CONFIG_VALUE_n 은 Windows 에서 환경을 되돌리는 시험 픽스처가 지워 자식 git 을 128 로 만들었다
+    R.check('[RN-12b] (#21) 워커 환경의 GIT_CONFIG_VALUE_n 에 빈 값이 없다', [ce1, cx1].every(e => Object.keys(e).filter(k => /^GIT_CONFIG_VALUE_\d+$/.test(k)).every(k => String(e[k]) !== '')), JSON.stringify(cfgPairs(ce1).filter(p => /=$/.test(p))));
     const ce2 = await envOf('claude', { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' });
     R.check('[RN-12] (M8) 이미 있는 GIT_CONFIG_* 는 보존하고 뒤에 덧붙인다', cfgPairs(ce2)[0] === 'core.autocrlf=false' && cfgPairs(ce2).includes('push.default=nothing'), JSON.stringify(cfgPairs(ce2)));
     // 임시 폴더 안의 bare 원격에만 — 외부로 나가는 push 는 없다.

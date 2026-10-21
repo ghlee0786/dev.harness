@@ -32,6 +32,41 @@ function blockReason(mine, secrets) {
   return r;
 }
 
+// [2026-10-21 자동 이슈 #35] 대화 에이전트가 "다음 단계는 바로 이어서 진행하겠다" 고 답한 뒤 아무것도 띄우지 않고 차례를 끝내,
+//   사용자가 물을 때까지 실제로는 멈춰 있었다. 마지막 답에 그런 약속이 있는데 이번 차례에 이어 갈 것(백그라운드 작업 · 예약 깨우기 ·
+//   감시 · 하네스 작업)을 하나도 띄우지 않았으면 한 번만 되돌려 보낸다. 질문으로 끝난 답 · 이미 되돌려 보낸 뒤(stop_hook_active)는 그냥 둔다.
+const PROMISE = /(바로 이어서|이어서 (진행|하겠|할게|작업)|곧 (시작|진행)하|계속 진행하겠|다음 단계(를|는)? ?(바로|곧|이어서)|지금 (시작|진행)하겠|\b(I'll|I will) (now )?(continue|proceed|start|kick off) (with|on|the)\b|\bwill (continue|proceed) (now|next|right away)\b)/i;
+const CONTINUES = new Set(['ScheduleWakeup', 'Monitor', 'CronCreate', 'Workflow']);
+function lastTurn(transcriptPath) {
+  const fs = require('node:fs');
+  let text = ''; try { const st = fs.statSync(transcriptPath); const fd = fs.openSync(transcriptPath, 'r'); const n = Math.min(st.size, 400000); const b = Buffer.alloc(n); fs.readSync(fd, b, 0, n, st.size - n); fs.closeSync(fd); text = b.toString('utf8'); } catch { return null; }
+  const rows = text.split(/\r?\n/).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  // 마지막 사람 메시지(도구 결과가 아닌 글) 뒤의 것만
+  let start = 0;
+  for (let i = rows.length - 1; i >= 0; i--) { const r = rows[i], c = r.message && r.message.content; if (r.type === 'user' && !r.isMeta && (typeof c === 'string' || (Array.isArray(c) && c.some(x => x && x.type === 'text')))) { start = i + 1; break; } }
+  let finalText = '', launched = false;
+  for (const r of rows.slice(start)) {
+    if (r.type !== 'assistant' || !r.message || !Array.isArray(r.message.content)) continue;
+    for (const x of r.message.content) {
+      if (x.type === 'text' && x.text) finalText = x.text;
+      if (x.type === 'tool_use') {
+        const inp = x.input || {};
+        if (CONTINUES.has(x.name) || inp.run_in_background === true || /\bcli\.js\s+(go|resume|factory)\b|--detach\b/.test(String(inp.command || ''))) launched = true;
+      }
+    }
+  }
+  return { finalText, launched };
+}
+function promiseWithoutAction(input) {
+  if (input.stop_hook_active === true || !input.transcript_path) return null;
+  if (Array.isArray(input.background_tasks) && input.background_tasks.some(t => t && !/^(completed|done|failed|killed|stopped)$/i.test(String(t.status || '')))) return null;
+  const t = lastTurn(input.transcript_path);
+  if (!t || t.launched) return null;
+  const tail = String(t.finalText || '').trim().slice(-600);
+  if (!tail || /[?？]\s*[)\]"'`*_]*\s*$/.test(tail) || !PROMISE.test(tail)) return null;
+  return '방금 다음 단계를 "이어서 진행하겠다" 고 했지만, 이번 차례에 이어 갈 것(백그라운드 작업 · 예약 깨우기 · 감시 · 하네스 작업)을 하나도 띄우지 않았습니다 — 차례가 끝나면 아무것도 진행되지 않습니다. 약속한 단계를 지금 시작하거나, 시작하지 않을 거면 그렇다고 말하고 끝내세요.';
+}
+
 function main() {
   let input = null;
   try {
@@ -43,6 +78,10 @@ function main() {
     const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd();
     const info = C.repoInfo(cwd);
     if (!info || C.isHarnessWorktree(info.root)) return;
+    if (C.detectRuntime(input) !== 'codex') {
+      const why = promiseWithoutAction(input);
+      if (why) { process.stdout.write(JSON.stringify({ decision: 'block', reason: why }) + '\n'); return; }
+    }
     const sess = C.loadSession(info.common, sid);
     if (!sess || !sess.files || !sess.files.length) return;
     const runtime = C.detectRuntime(input);
@@ -95,4 +134,4 @@ function main() {
 }
 
 if (require.main === module) { main(); process.exitCode = 0; }
-module.exports = { firstLine, blockReason, filesSummary };
+module.exports = { firstLine, blockReason, filesSummary, promiseWithoutAction, lastTurn };

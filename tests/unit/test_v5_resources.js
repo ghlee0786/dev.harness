@@ -50,6 +50,8 @@ function fakeDocker(state) {
       env.TEMP === dir && env.TMP === dir && env.TMPDIR === dir && fs.existsSync(dir) && env.COMPOSE_PROJECT_NAME === `harness-${ID}` && env.HARNESS_TASK_ID === ID && env.HARNESS_DATA_NS === 'harness_20261020_101010_abcd', JSON.stringify(env));
     R.check('[RS-01] proc.isolationEnv 는 자원 장부의 환경을 그대로 쓴다(작업자 · 하네스 검사 모두) · worktree 밖이면 빈 환경', JSON.stringify(env2) === JSON.stringify(env) && JSON.stringify(P.isolationEnv(root)) === '{}', JSON.stringify(env2));
     R.check('[RS-01] 임시 폴더는 저장소 밖(OS 임시 폴더 아래) — 저장소 · .git 안이 아니다', !path.resolve(dir).toLowerCase().startsWith(path.resolve(root).toLowerCase()) && dir.includes(`${path.sep}harness${path.sep}`), dir);
+    // [자동 이슈 #25 · #26] dotnet 빌드 서버 · MSBuild 노드 재사용을 끈다 — 고아 노드가 1,000개씩 쌓였다
+    R.check('[RS-01b] (#25) 작업자 · 검사 환경: MSBUILDDISABLENODEREUSE=1 · DOTNET_CLI_USE_MSBUILD_SERVER=0 · UseSharedCompilation=false', env.MSBUILDDISABLENODEREUSE === '1' && env.DOTNET_CLI_USE_MSBUILD_SERVER === '0' && env.UseSharedCompilation === 'false' && env2.MSBUILDDISABLENODEREUSE === '1', JSON.stringify({ a: env.MSBUILDDISABLENODEREUSE, b: env2.MSBUILDDISABLENODEREUSE }));
     R.check('[RS-01] 데이터 구역 이름은 DB · 큐 이름에 그대로 쓸 수 있다(소문자 · 숫자 · 밑줄)', /^[a-z0-9_]+$/.test(Res.dataNs(ID)) && Res.dataNs('t-20261020-101010-ABCD') === 'harness_20261020_101010_abcd');
     // 작업 환경 안에서 하네스를 다시 불러도(TEMP 가 이미 작업 폴더) 겹겹이 들어가지 않는다
     const keep = process.env.HARNESS_TMP_BASE; process.env.HARNESS_TMP_BASE = keep || os.tmpdir();   // 작업 환경이 물려주는 바탕(러너가 준 것이 있으면 그것)
@@ -179,6 +181,15 @@ function fakeDocker(state) {
     const cli9 = spawnSync(process.execPath, ['-r', leak, path.join(__dirname, '..', '..', 'harness', 'cli.js'), 'status', '--root', r9], { encoding: 'utf8', windowsHide: true, timeout: 40000 });
     R.check('[RS-09] 남은 핸들(타이머)이 있어도 CLI 는 일을 마치고 몇 초 안에 끝난다(종료 코드 유지)', !cli9.error && cli9.status === 0 && Date.now() - t9 < 25000, JSON.stringify({ err: cli9.error && cli9.error.code, status: cli9.status, ms: Date.now() - t9, out: (cli9.stdout || '').slice(0, 120) }));
     R.check('[RS-06] 작업자 지시문: 쓰레기를 남기지 않는 곳($TEMP · $HARNESS_DATA_NS)을 알려 준다', /\$HARNESS_DATA_NS/.test(require('../../harness/lib/prompts').AUTONOMY || '') || /\$HARNESS_DATA_NS/.test(JSON.stringify(require('../../harness/lib/prompts'))), 'AUTONOMY');
+    // RS-11 — [자동 이슈 #34] 작업 시작 때 이미지 목록을 찍고, 끝날 때 원래 있던 이미지가 사라졌으면 알아본다(작업이 만든 새 이미지는 빼고)
+    { const imgs = ['app:latest@aaa', 'db:16@bbb'];
+      const run11 = (cmd, args) => args[0] === 'version' ? { code: 0, out: '27.0', err: '' } : args[0] === 'images' ? { code: 0, out: imgs.join('\n') + '\n', err: '' } : { code: 0, out: '', err: '' };
+      const task11 = {}; Res.snapshotImages(task11, { run: run11 });
+      imgs.splice(0, 1); imgs.push('harness-t-1-built:latest@ccc');   // 작업 중: app 이 사라지고 작업이 새 이미지를 만들었다
+      const gone11 = Res.removedImages(task11, { run: run11 });
+      R.check('[RS-11] (#34) 작업 전부터 있던 이미지가 사라지면 알아본다 — app:latest 만(작업이 만든 새 이미지는 아님)', JSON.stringify(gone11) === JSON.stringify(['app:latest@aaa']) && (task11.images_before || []).length === 2, JSON.stringify({ gone11, before: task11.images_before }));
+      const P11 = require('../../harness/lib/prompts');
+      R.check('[RS-11] (#34) 작업자 지시문: 이 작업이 만들지 않은 이미지 · 컨테이너 · 볼륨은 도구 · 스크립트를 거쳐서라도 지우지 마라', /Never remove Docker images, containers or volumes this task did not create/.test(P11.AUTONOMY)); }
   } catch (e) { R.check('예외 없이 끝난다', false, String(e && e.stack || e).slice(0, 900)); }
   finally { try { fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 정리 실패는 결과와 무관 */ } }
   R.done();

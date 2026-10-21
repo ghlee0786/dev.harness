@@ -18,7 +18,7 @@ usage:
       --attach <file>: give the worker a file with the goal — image · video (frames + transcript) · audio (transcript) · PDF · document (repeatable)
       --allow "<rule>": also let the unattended worker run this, e.g. --allow "Bash(docker build:*)" (repeatable; added to the project
                         block's worker_allow; Tool one of Bash|PowerShell|Read|Edit|Write|WebFetch; git writes · shells · Bash(*) are refused; no effect on Codex)
-  node harness/cli.js resume <id> [--allow "<rule>"]... [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--model M] [--effort E] [--fresh-session]
+  node harness/cli.js resume <id> [--allow "<rule>"]... [--budget-usd N] [--token-budget N] [--wall-min N] [--max-continuations N] [--model M] [--effort E] [--fresh-session] [--mode thin|full]
       caps are totals for the whole task (not additions): pass the new total, e.g. --budget-usd 40 after $20 was spent
       a blocked task resumes in the same session: its BLOCKED.md is kept as BLOCKED.<n>.md and the worker is told what you allowed
       --note "<text>" | --note-file <path>: also hand the worker these additional instructions (a done task with new notes can be resumed)
@@ -48,7 +48,7 @@ usage:
   node harness/cli.js doc index | doc check [--json] | doc history <path> [--json] | doc restore <path> <version>
   node harness/cli.js doc adopt <path> [--status draft|active|done] [--with <project>] [--direction outgoing|incoming]   (bring an existing doc under management)
       documents are created only when the user asks; nothing is generated automatically
-  node harness/cli.js factory "<request>" | --request-file <path> [--jobs N] [--budget-usd N] [--card-budget-usd N] [--max-cards N] [--test-agents N] [--waves N] [--verify] [--base <branch>] [--detach|--foreground]
+  node harness/cli.js factory "<request>" | --request-file <path> [--jobs N] [--budget-usd N] [--card-budget-usd N] [--max-cards N] [--test-agents N] [--waves N] [--verify] [--check "<cmd>"]... [--mode thin|full] [--base <branch>] [--detach|--foreground]
       split the request into cards (planner agent) · run the cards as parallel tasks with owned paths · merge them one at a time into harness/factory/<id> · then testers (charters) test the merged result, defects reproduced by another agent become fix cards
   node harness/cli.js factory status [<id>] | factory wait <id> | factory stop <id> | factory accept <id>   (accept merges into your branch — only after the user says so)
   node harness/cli.js help

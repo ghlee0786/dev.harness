@@ -244,6 +244,12 @@ async function accept(o) {
       // 늦은 기준선(D2): 실패했는데 기준선이 없으면 지금 작업 시작 시점에서 잰다 — 명령이 바뀌면(멈춘 테스트 · 빠진 검사) 다시 잰다
       if (!j.ok && !task.checks.baseline) { const before = JSON.stringify(task.checks.commands); await L.ensureBaseline(root, task, { o: { checkTimeoutMs: checkTimeout(task, o) }, log }); if (JSON.stringify(task.checks.commands) !== before) j = await run1(); }
       task.checks.last = K.brief(j);
+      // [자동 이슈 #29] 저장소 검사가 작업 전부터 시간 초과로 모두 빠졌다 — 아무것도 재지 못했으니 검증 안 된 병합을 막는다(--force 면 이 단계를 거치지 않는다)
+      if (!task.checks.commands.length && (task.checks.dropped || []).length) {
+        S.log(root, task.id, { event: 'checks', phase: 'accept', why, verdict: 'unverified', dropped: task.checks.dropped.length });
+        S.writeTask(root, task);
+        return refused(task, `unverified — the repository checks were dropped (${task.checks.dropped.map(d => d.command).join(' ; ').slice(0, 200)}: timed out even before the task), so nothing judged this work; run the tests yourself, then accept again with --force`);
+      }
       const v = K.judge(j, task.checks.baseline, { notWorse: task.checks.source !== 'user' });
       S.log(root, task.id, { event: 'checks', phase: 'accept', why, verdict: v.verdict, pass: j.pass, fail: j.fail });
       if (v.verdict !== 'fail') return null;
@@ -264,7 +270,9 @@ async function accept(o) {
         rounds += res.rounds;
       } else task.commits.push(G.headSha(P.wt));
       S.log(root, task.id, { event: 'target_merged', target, rounds });
-      if (task.checks.commands.length) { const no = await checkHere('target brought in'); if (no) return no; }
+      // [자동 이슈 #31] --force 는 사용자가 검사 결과를 알고 합치기로 한 것 — 대상을 들인 뒤의 검사도 건너뛴다(기록은 남긴다)
+      if (o.force) S.log(root, task.id, { event: 'checks', phase: 'accept', why: 'target brought in', verdict: 'skipped', skipped: 'force' });
+      else if (task.checks.commands.length) { const no = await checkHere('target brought in'); if (no) return no; }
     }
     // 대상 브랜치를 새로 들이지 않았어도, 마지막으로 기록된 검사가 실패면 다시 잰다 — [2026-10-20 실측 · 작업 수치에서 발견]
     //   위에서 거절된 작업을 다시 accept 하면 이미 들인 상태라 위 고리를 건너뛰어 검사 없이 병합됐다(실패 0 → 133 인 채로 사용자 브랜치에).
@@ -303,7 +311,9 @@ async function accept(o) {
     if (!m.ok) {
       if (G.mergeInProgress(co.path)) G.git(co.path, ['merge', '--abort'], { allowFail: true });
       S.writeTask(root, task);
-      return refused(task, `git merge into ${target} failed: ${m.err.trim().slice(0, 300)}`);
+      // [2026-10-19 자동 이슈 #20] 남은 index.lock 때문에 병합이 멈췄다 — 잠금은 기다렸다 다시 시도한 뒤에도 남은 것이다. 무엇을 하면 되는지 알린다.
+      const lockHint = /index\.lock/.test(m.err) ? ` — ${path.join(co.path, '.git', 'index.lock')} is left over; if no git command is running (editor, another session), delete that file and run accept again` : '';
+      return refused(task, `git merge into ${target} failed: ${m.err.trim().slice(0, 300)}${lockHint}`);
     }
     // 병합이 정말 이 작업의 병합 커밋을 만들었는가: HEAD 가 움직였고 · 첫 부모 = 이전 HEAD · 둘째 부모 = 결과 브랜치 끝.
     //   "Already up to date" 는 exit 0 이지만 커밋이 없다 — 그때 HEAD(사용자 커밋)를 merge_commit 으로 적으면 나중 cancel 이 사용자 커밋을 되돌린다.

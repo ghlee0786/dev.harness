@@ -81,6 +81,37 @@ const events = (root, id) => { try { return fs.readFileSync(S.taskPaths(root, id
     let usage = null; try { await L.go({ ...quiet, root: r7, mode: 'shallow', goal: 'x', run: async o => ok(o) }); } catch (e) { usage = e.code; }
     R.check('[TH-06] 모드 — 지정 없으면 thin(기본) · yaml mode: full 이면 full · 모르는 값은 USAGE', S.readTask(r6, t6.id).mode === 'full' && S.readTask(r7, t7.id).mode === 'thin' && usage === 'USAGE',
       JSON.stringify({ a: S.readTask(r6, t6.id).mode, b: S.readTask(r7, t7.id).mode, usage }));
+    // TH-09 — [자동 이슈 #27 · #29 · #31] 저장소 검사가 작업 전부터 시간 초과 → 판정에서 빠진다(아무것도 못 잼)
+    //   accept 는 "검증 안 됨" 으로 막고 · HARNESS_RESULT 는 ok=null · verdict=unverified · --force 면 합친다(대상을 들인 뒤에도 검사로 막지 않는다)
+    const r9 = repo('r9', 2);
+    write(path.join(r9, 'AGENTS.md'), '# p\n\n```yaml\ntest_command: "node slow.js"\n```\n');   // 검사 명령을 느린 것으로 바꾼다(repo() 의 것을 덮어쓴다)
+    write(path.join(r9, 'slow.js'), 'setTimeout(() => process.exit(0), 20000);\n'); git(r9, 'add', '-A'); git(r9, 'commit', '-qm', 'slow test');
+    const t9 = await L.go({ ...quiet, root: r9, mode: 'thin', goal: 'README 를 더하라', run: async o => { write(path.join(o.cwd, 'README.md'), '# r9\n'); return ok(o); } });
+    const a9 = await I.accept({ root: r9, id: t9.id, log: () => {}, checkTimeoutMs: 1500 });
+    const res9 = L.result(S.readTask(r9, t9.id));
+    write(path.join(r9, 'later.txt'), 'x\n'); git(r9, 'add', '-A'); git(r9, 'commit', '-qm', 'main moved on');   // 대상이 앞서 나가 accept 가 대상을 들인다
+    const a9f = await I.accept({ root: r9, id: t9.id, log: () => {}, checkTimeoutMs: 1500, force: true });
+    R.check('[TH-09] (#27 #29 #31) 검사가 모두 빠지면 accept 는 "검증 안 됨" 으로 막고 · 결과는 ok=null · verdict=unverified · --force 면 대상을 들인 뒤에도 검사 없이 합친다',
+      a9.refused === true && /unverified/.test(a9.reason) && res9.checks.verdict === 'unverified' && res9.checks.ok === null && a9f.status === 'accepted' && fs.existsSync(path.join(r9, 'README.md')),
+      JSON.stringify({ a: a9.refused, why: String(a9.reason).slice(0, 120), v: res9.checks.verdict, ok: res9.checks.ok, f: a9f.status, fwhy: String(a9f.reason).slice(0, 120) }));
+
+    // TH-10 — [자동 이슈 #28] 작업자가 "백그라운드로 돌렸다 · 끝나면 보고하겠다" 로 턴을 끝내면 done 대신 한 번 더 준다(기다리던 결과를 받아 끝내라)
+    const r10 = repo('r10', 1); const msgs10 = [];
+    const t10 = await L.go({ ...quiet, root: r10, mode: 'thin', goal: '값을 2 로', run: async o => { msgs10.push(o.prompt); setTo(o, 2);
+      return { ...ok(o), final_text: msgs10.length === 1 ? '구현했습니다. 테스트를 백그라운드로 실행했습니다. 끝나면 결과를 보고하겠습니다.' : '테스트 1개 통과(node check.js). 끝.' }; } });
+    const nudge10 = events(r10, t10.id).find(e => e.event === 'nudge');
+    R.check('[TH-10] (#28) "기다리는 중" 으로 끝난 턴은 한 번 더 — 두 턴 · nudge(pending) · 두 번째 지시는 지금 실행하고 결과로 끝내라', t10.status === 'done' && msgs10.length === 2 && nudge10 && nudge10.why === 'pending' && /run it now in the foreground/.test(msgs10[1]),
+      JSON.stringify({ s: t10.status, n: msgs10.length, why: nudge10 && nudge10.why }));
+
+    // TH-11 — [자동 이슈 #30] resume --mode thin: full 로 만든(막힌) 작업을 thin 으로 이어 간다 — 같은 작업 · 기록에 모드 바뀜 · 끝 검사 미룸
+    const r11 = repo('r11', 1); let n11 = 0;
+    const run11 = async o => { n11++; if (n11 === 1) write(path.join(o.cwd, '.harness', /\.harness\/(t-[\w-]+)\//.exec(o.prompt)[1], 'BLOCKED.md'), '# 막힘\n사람 확인 필요\n'); else setTo(o, 2); return ok(o); };
+    const t11 = await L.go({ ...quiet, root: r11, mode: 'full', goal: '값을 2 로', run: run11 });
+    const t11b = await L.resume({ ...quiet, root: r11, id: t11.id, mode: 'thin', run: run11 });
+    const k11 = S.readTask(r11, t11.id), mc11 = events(r11, t11.id).find(e => e.event === 'mode_changed');
+    R.check('[TH-11] (#30) resume --mode thin — full 작업이 thin 으로 이어져 done · 모드 바뀜 기록 · 끝 검사 미룸', t11.status === 'blocked' && t11b.status === 'done' && k11.mode === 'thin' && mc11 && mc11.from === 'full' && mc11.to === 'thin' && k11.checks.deferred === true,
+      JSON.stringify({ a: t11.status, b: t11b.status, m: k11.mode, mc: mc11, why: t11b.reason }));
+
     // TH-07 — [2026-10-21 사용자 지시: 배포 때 기존 세션 작업의 맥락을 놓치지 않게] 갱신 전에 만들어진 작업(기록에 mode 없음)은 이어 가도 예전 방식(full) 그대로
     const Pr = require('../../harness/lib/prompts');
     const old = { id: 't-old', goal: 'g', checks: { source: 'repo', commands: [['node', 'check.js']] }, caps: { budget_usd: 1 }, spent: { cost_usd: 0 } };

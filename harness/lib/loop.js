@@ -172,6 +172,7 @@ async function go(o) {
   try {
     G.addWorktree(root, P.wt, { branch: P.branch, base: baseCommit });
     task.worktree_include = G.copyWorktreeInclude(root, P.wt);
+    require('./resources').snapshotImages(task);   // [#34] 끝날 때 원래 있던 이미지가 사라졌는지 본다
     if (attach.length) {
       const prep = M.prepare(attach, path.join(P.dir, 'attachments'), { transcribe: K.yamlString(here, 'transcribe_command') || K.yamlString(root, 'transcribe_command') });
       task.attachments = prep.items;
@@ -241,6 +242,12 @@ async function resume(o) {
   task.caps = capsFrom(o, task.caps);
   if (o.model) task.model = o.model;
   if (o.effort) task.effort = o.effort;
+  // [2026-10-21 자동 이슈 #30] resume --mode thin|full — 갱신 전 full 로 만든 작업을 thin 으로(또는 반대로) 이어 간다. 세션 · 브랜치 · 기록은 그대로.
+  if (o.mode) {
+    const m = String(o.mode).toLowerCase();
+    if (!['thin', 'full'].includes(m)) { lock.release(); throw Object.assign(new Error(`unknown mode: ${o.mode} (thin or full)`), { code: 'USAGE' }); }
+    if (m !== (task.mode || 'full')) { S.log(root, task.id, { event: 'mode_changed', from: task.mode || 'full', to: m }); task.mode = m; if (m === 'full') delete task.checks.deferred; }
+  }
   const wasBlocked = task.status === 'blocked';
   task.allow = [...(task.allow || []), ...added];
   task.status = 'running'; task.reason = ''; task.owner = S.ownerRecord(); task.last_signature = null;
@@ -607,11 +614,11 @@ async function loop(c, kind) {
     if (pendingNotes(root, task.id).length) { message = Pr.notesTurnMessage(task, deadline); kind = 'continue'; continue; }
     // done 은 무언가를 했을 때만(H2): 기준 대비 .harness/ 밖 변경이 0 이거나 마지막 말이 질문이면 — 검사가 초록이어도 — 1회 넛지.
     const changed = changedOutsideHarness(c);
-    const asked = Pr.isQuestion(r.final_text);
-    if ((!changed.length || asked) && !task.nudged) {
+    const asked = Pr.isQuestion(r.final_text), pending = Pr.isPending(r.final_text);
+    if ((!changed.length || asked || pending) && !task.nudged) {
       task.nudged = true; S.writeTask(root, task);
-      S.log(root, task.id, { event: 'nudge', why: !changed.length ? 'no_changes' : 'question' });
-      message = !changed.length ? Pr.noChangeMessage(task) : Pr.nudgeMessage(task); kind = 'continue';
+      S.log(root, task.id, { event: 'nudge', why: !changed.length ? 'no_changes' : asked ? 'question' : 'pending' });
+      message = !changed.length ? Pr.noChangeMessage(task) : asked ? Pr.nudgeMessage(task) : Pr.pendingMessage(task); kind = 'continue';
       continue;
     }
     if (!changed.length) {
@@ -718,17 +725,26 @@ function decisionLines(task, ko) {
   return out;
 }
 
+// 기계가 읽는 검사 판정 — [2026-10-21 자동 이슈 #27] 판정에 쓴 검사가 0개(작업 전부터 시간 초과로 모두 빠짐)인데 ok · pass 로 나가
+//   완료 알림 · 자동 판단이 검증된 작업으로 읽었다. 미룬 검사(thin)는 deferred, 재지 못한 검사는 unverified.
+function checksVerdict(ch) {
+  if (!ch) return null;
+  const dropped = (ch.dropped || []).length, none = !(ch.commands || []).length;
+  if (none && dropped) return 'unverified';
+  if (ch.deferred && !ch.last) return 'deferred';
+  return ch.verdict || null;
+}
 function result(task) {
   const ch = task.checks || null, last = ch && (ch.last || null);
   return { id: task.id, status: task.status, reason: task.reason, branch: task.branch, commit: task.head || (task.commits || []).slice(-1)[0] || null,
     base_branch: task.base_branch, base_commit: task.base_commit, session_id: task.session_id,
-    checks: { source: ch ? ch.source : 'none', ok: last ? last.ok : null, pass: last ? last.pass : null, fail: last ? last.fail : null, baseline_fail: ch && ch.baseline ? ch.baseline.fail : null,
-      verdict: ch && ch.verdict || null, baseline_warning: ch && ch.baseline_warning || null },
+    checks: { source: ch ? ch.source : 'none', ok: last && checksVerdict(ch) !== 'unverified' ? last.ok : null, pass: last ? last.pass : null, fail: last ? last.fail : null, baseline_fail: ch && ch.baseline ? ch.baseline.fail : null,
+      verdict: checksVerdict(ch), baseline_warning: ch && ch.baseline_warning || null },
     cost_usd: task.spent.cost_usd, tokens: task.spent.tokens, continuations: task.spent.continuations, wall_ms: task.spent.wall_ms, unknown_cost_calls: task.spent.unknown_cost_calls || 0,
     files_changed: task.files_changed == null ? null : task.files_changed, tests_modified: task.tests_modified || [], checks_modified: task.checks_modified || [],
     secrets_excluded: task.secrets_excluded || [], commit_skipped: task.commit_skipped || [], outside_git: task.outside_git,
     worktree: task.worktree_kept ? task.worktree : null, worktree_kept: task.worktree_kept || null, merge_commit: task.merge_commit || null, revert_commit: task.revert_commit || null,
-    docs: task.docs || [], decisions: task.decisions || null };
+    docs: task.docs || [], decisions: task.decisions || null, images_removed: task.images_removed || [] };
 }
 
 const listOf = (a, n) => `${a.slice(0, n).join(', ')}${a.length > n ? ` … (+${a.length - n})` : ''}`;
@@ -840,6 +856,7 @@ function reportKo(task, P) {
   const s = task.spent, c = task.caps, ch = task.checks || { source: 'none', commands: [] };
   const cli = 'node harness/cli.js';
   const L = [`pilot ${task.id} — ${task.status.toUpperCase()}`, ...summaryKo(task), `이유: ${reasonKo(task.reason)}`, ...decisionLines(task, true)];
+  if ((task.images_removed || []).length) L.push(`주의: 작업 전부터 있던 Docker 이미지가 작업 중에 사라졌다(이 작업이 만들지 않은 것) — ${task.images_removed.slice(0, 6).join(' · ')} · 그 이미지를 쓰는 서비스는 다시 빌드해야 할 수 있다`);
   if (task.mode === 'thin') L.push('모드: thin — 작업자가 스스로 계획 · 테스트 · 기록하고, 하네스는 끝난 뒤 검사 한 번을 기록만 한다(돌려보내지 않음 · 작업 전보다 나빠졌으면 failed)');
   L.push(`브랜치: ${task.branch}${task.head ? ` @ ${task.head.slice(0, 10)}` : ''} (${task.base_branch || 'detached HEAD'} @ ${String(task.base_commit || '').slice(0, 10)} 에서) — 사용자 브랜치는 그대로다.`);
   if (!ch.commands.length) L.push('검사: 없음 — 신뢰할 검사가 이 작업을 판정하지 않았다. 결과는 모델의 보고에만 기대고 있다.');
@@ -904,6 +921,7 @@ function report(task, P) {
   if (task.language === 'Korean') return reportKo(task, P);
   const s = task.spent, c = task.caps, ch = task.checks || { source: 'none', commands: [] };
   const lines = [`pilot ${task.id} — ${task.status.toUpperCase()}`, ...summaryKo(task), `why: ${task.reason}`, ...decisionLines(task, false)];
+  if ((task.images_removed || []).length) lines.push(`warning: Docker images that existed before the task disappeared during it (the task did not create them) — ${task.images_removed.slice(0, 6).join(' · ')} · services using them may need a rebuild`);
   if (task.mode === 'thin') lines.push('mode: thin — the worker plans, tests and records by itself; the harness runs the checks once at the end and only records them (no send-back; worse than before = failed)');
   lines.push(`branch: ${task.branch}${task.head ? ` @ ${task.head.slice(0, 10)}` : ''} (from ${task.base_branch || 'detached HEAD'} @ ${String(task.base_commit || '').slice(0, 10)}) — your branch is untouched.`);
   if (!ch.commands.length) lines.push('checks: none found — no trusted check judged this work; the result rests on the model\'s own report.');
